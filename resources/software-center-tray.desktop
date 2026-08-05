@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Software Center Tray
+Comment=Software Center system tray daemon
+Exec=/usr/bin/software-center-tray
+Icon=software-center
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-after=panel

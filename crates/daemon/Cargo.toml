@@ -1,0 +1,35 @@
+[package]
+name = "scenter-daemon"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "software-center-tray"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+scenter-updates  = { workspace = true }
+scenter-flatpak  = { workspace = true }
+scenter-packages = { workspace = true }
+scenter-appimages = { workspace = true }
+
+# System tray via D-Bus StatusNotifierItem (KDE + GNOME AppIndicator)
+ksni = "0.2"
+
+# Badge drawing — pixel manipulation for update count overlay
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+# Desktop notifications
+notify-rust = "4"
+
+# POSIX signal sending (kill UI on Quit)
+libc = "0.2"

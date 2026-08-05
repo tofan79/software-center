@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>gay.pancake.lsfg-vk</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>LSFG-VK</name>
+  <summary>Vulkan frame generation for Linux games</summary>
+
+  <description>
+    <p>
+      LSFG-VK is a Vulkan layer that brings frame generation to Linux games,
+      interpolating frames to boost perceived framerate without requiring
+      native game support. It works as a drop-in layer across any Vulkan title.
+    </p>
+    <ul>
+      <li>Frame generation via Vulkan layer — no game modifications needed</li>
+      <li>Works with Steam, Lutris, and native Vulkan titles</li>
+      <li>Graphical UI for configuring the layer per-game</li>
+      <li>Low-latency interpolation tuned for gaming</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>Game</category>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>frame generation</keyword>
+    <keyword>vulkan</keyword>
+    <keyword>gaming</keyword>
+    <keyword>fps</keyword>
+    <keyword>interpolation</keyword>
+    <keyword>lsfg</keyword>
+  </keywords>
+
+  <pkgname>lsfg-vk</pkgname>
+
+  <icon type="stock">gay.pancake.lsfg-vk-ui</icon>
+
+  <url type="homepage">https://github.com/PancakeTAS/lsfg-vk</url>
+  <url type="bugtracker">https://github.com/PancakeTAS/lsfg-vk/issues</url>
+
+  <screenshots>
+  <screenshot type="default">
+    <caption>LSFG-VK configuration UI</caption>
+    <image type="source" width="1600" height="900">https://rakuos.org/themes/raku/assets/images/appstream/lsfg-vk.png</image>
+  </screenshot>
+</screenshots>
+
+  <launchable type="desktop-id">gay.pancake.lsfg-vk-ui.desktop</launchable>
+
+  <provides>
+    <binary>lsfg-vk-ui</binary>
+  </provides>
+
+  <content_rating type="oars-1.1"/>
+</component>

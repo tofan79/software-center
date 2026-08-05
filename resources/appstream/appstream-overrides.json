@@ -1,0 +1,10 @@
+{
+  "_comment": "RakuOS AppStream metadata overrides. Add entries here to fix wrong or missing app names/summaries.",
+  "_format": {
+    "key": "app-id or flatpak:app-id",
+    "fields": "name, summary, description, categories (all optional)"
+  },
+  "dev.zed.Zed-Preview": {
+    "categories": ["Development", "IDE", "TextEditor", "Utility"]
+  }
+}

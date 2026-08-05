@@ -1,0 +1,24 @@
+[package]
+name = "scenter-qt"
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "software-center"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+scenter-appstream = { workspace = true }
+scenter-flatpak   = { workspace = true }
+scenter-packages  = { workspace = true }
+scenter-updates   = { workspace = true }
+scenter-appimages = { workspace = true }
+scenter-home      = { workspace = true }
+qmetaobject = "0.2"

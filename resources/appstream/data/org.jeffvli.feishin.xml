@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.jeffvli.feishin</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <name>Feishin</name>
+  <summary>Jellyfin, Navidrome, and OpenSubsonic compatible music player</summary>
+
+  <description>
+    <p>
+      Feishin is a modern, cross-platform music player for self-hosted music servers.
+      It is a complete rewrite of Sonixd with a fresh UI and expanded backend support.
+    </p>
+    <ul>
+      <li>Supports Navidrome, Jellyfin, and OpenSubsonic-compatible servers</li>
+      <li>MPV and web player backends</li>
+      <li>Scrobble playback to your server</li>
+      <li>Smart playlist editor (Navidrome)</li>
+      <li>Synchronized and unsynchronized lyrics support</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Audio</category>
+    <category>Player</category>
+    <category>Music</category>
+  </categories>
+
+  <keywords>
+    <keyword>music</keyword>
+    <keyword>navidrome</keyword>
+    <keyword>jellyfin</keyword>
+    <keyword>subsonic</keyword>
+    <keyword>player</keyword>
+    <keyword>streaming</keyword>
+  </keywords>
+
+  <pkgname>feishin</pkgname>
+
+  <icon type="stock">org.jeffvli.feishin</icon>
+
+  <url type="homepage">https://github.com/jeffvli/feishin</url>
+  <url type="bugtracker">https://github.com/jeffvli/feishin/issues</url>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Home screen</caption>
+      <image type="source">https://raw.githubusercontent.com/jeffvli/feishin/development/media/preview_home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Album detail view</caption>
+      <image type="source">https://raw.githubusercontent.com/jeffvli/feishin/development/media/preview_album_detail.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Full screen player</caption>
+      <image type="source">https://raw.githubusercontent.com/jeffvli/feishin/development/media/preview_full_screen_player.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Smart playlist creation</caption>
+      <image type="source">https://raw.githubusercontent.com/jeffvli/feishin/development/media/preview_smart_playlist.png</image>
+    </screenshot>
+  </screenshots>
+
+  <launchable type="desktop-id">org.jeffvli.feishin.desktop</launchable>
+
+  <content_rating type="oars-1.1"/>
+</component>
