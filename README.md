@@ -2,6 +2,11 @@
 
 A modern app store for Fedora and derivatives, built with Rust + Qt6/QML.
 
+> Derived from [rakuos-software](https://gitlab.com/rakuos/packages/rakuos/rakuos-software)
+> (GPL-3.0-or-later). Modified: stripped retired features (webapps, Plasma/KNS
+> add-ons, distrobox, bootc, firmware, reviews), rebranded to software-center,
+> repackaged for COPR.
+
 ## Features
 
 - **Flatpak** — browse, install, update, and remove apps from Flathub
