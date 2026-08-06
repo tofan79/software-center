@@ -277,11 +277,166 @@ pub fn get_installed() -> Result<Vec<NativeApp>> {
         });
     }
 
+    // Non-atomic (traditional) Fedora: there is no overlay `packages.list` nor
+    // `packages-rpm.list`, so fall back to listing installed GUI apps straight
+    // from the rpm database instead of leaving the Installed tab empty.
+    if results.is_empty()
+        && !std::path::Path::new(PACKAGES_LIST).exists()
+        && !std::path::Path::new(LOCAL_RPM_LIST).exists()
+    {
+        let installed = get_installed_packages().unwrap_or_default();
+
+        // 1) Apps present in the AppStream catalog (Fedora/Flathub-sourced RPMS)
+        //    get full metadata: name, summary, icon from the catalog.
+        let mut names: Vec<&String> = installed.iter().collect();
+        names.sort();
+        for name in names {
+            if let Some(meta) = pkg_map.get(name) {
+                let mut app = NativeApp::from(*meta);
+                app.installed = true;
+                app.source = "native".to_string();
+                if app.icon_path.is_empty() {
+                    app.icon_path = find_local_rpm_icon(name);
+                }
+                results.push(app);
+            }
+        }
+
+        // 2) Remaining GUI apps (COPR/Terra/third-party RPMs) — enumerate
+        //    /usr/share/applications/*.desktop and resolve the owning package.
+        let already: std::collections::HashSet<String> =
+            results.iter().map(|a| a.package_name.clone()).collect();
+        results.extend(scan_installed_desktop_apps(&pkg_map, &already, &installed));
+    }
+
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     let installed_rpm = get_installed_packages()?;
     let installed_fp = get_installed_flatpaks();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
     Ok(results)
+}
+
+/// Enumerate GUI applications installed outside the AppStream catalog by
+/// scanning /usr/share/applications/*.desktop and resolving each file's owning
+/// package via `rpm -qf`. Covers COPR/Terra/third-party RPM apps on traditional
+/// (non-atomic) Fedora.
+fn scan_installed_desktop_apps(
+    pkg_map: &std::collections::HashMap<String, &scenter_appstream::AppInfo>,
+    already: &std::collections::HashSet<String>,
+    installed: &std::collections::HashSet<String>,
+) -> Vec<NativeApp> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/usr/share/applications") else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(fname) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !fname.ends_with(".desktop") || fname.starts_with('.') {
+            continue;
+        }
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+
+        let mut d_name = String::new();
+        let mut d_icon = String::new();
+        let mut d_comment = String::new();
+        let mut no_display = false;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("NoDisplay=true") {
+                no_display = true;
+            } else if let Some(v) = line.strip_prefix("Name=") {
+                if d_name.is_empty() {
+                    d_name = v.trim().to_string();
+                }
+            } else if let Some(v) = line.strip_prefix("Icon=") {
+                if d_icon.is_empty() {
+                    d_icon = v.trim().to_string();
+                }
+            } else if let Some(v) = line.strip_prefix("Comment=") {
+                if d_comment.is_empty() {
+                    d_comment = v.trim().to_string();
+                }
+            }
+        }
+        if no_display {
+            continue;
+        }
+
+        // Owning package for this desktop file.
+        let Ok(q) = Command::new("rpm")
+            .args(["-q", "--queryformat", "%{NAME}", path.to_str().unwrap_or("")])
+            .output()
+        else {
+            continue;
+        };
+        if !q.status.success() {
+            continue;
+        }
+        let pkg = String::from_utf8_lossy(&q.stdout).trim().to_string();
+        if pkg.is_empty() || !installed.contains(&pkg) || already.contains(&pkg) {
+            continue;
+        }
+
+        let mut app = match pkg_map.get(&pkg) {
+            Some(meta) => {
+                let mut a = NativeApp::from(*meta);
+                a.installed = true;
+                a
+            }
+            None => NativeApp {
+                id: pkg.clone(),
+                package_name: pkg.clone(),
+                name: if d_name.is_empty() { pkg.clone() } else { d_name },
+                summary: if d_comment.is_empty() {
+                    "Installed application".to_string()
+                } else {
+                    d_comment
+                },
+                source: "native".to_string(),
+                installed: true,
+                icon_path: String::new(),
+                ..Default::default()
+            },
+        };
+        app.source = "native".to_string();
+        if app.icon_path.is_empty() && !d_icon.is_empty() {
+            app.icon_path = resolve_icon(&d_icon);
+        }
+        if app.icon_path.is_empty() {
+            app.icon_path = find_local_rpm_icon(&pkg);
+        }
+        out.push(app);
+    }
+    out
+}
+
+/// Resolve a themed icon name (or absolute path) to a file on disk.
+fn resolve_icon(icon: &str) -> String {
+    if icon.starts_with('/') {
+        return if std::path::Path::new(icon).exists() {
+            icon.to_string()
+        } else {
+            String::new()
+        };
+    }
+    for size in &["256x256", "128x128", "64x64", "48x48", "32x32"] {
+        for ext in &["png", "svg"] {
+            let path = format!("/usr/share/icons/hicolor/{}/apps/{}.{}", size, icon, ext);
+            if std::path::Path::new(&path).exists() {
+                return path;
+            }
+        }
+    }
+    let scalable = format!("/usr/share/icons/hicolor/scalable/apps/{}.svg", icon);
+    if std::path::Path::new(&scalable).exists() {
+        return scalable;
+    }
+    String::new()
 }
 
 /// A lightweight view of an installed Flatpak runtime or add-on.
@@ -849,7 +1004,7 @@ fn user_remote_names() -> HashSet<String> {
 /// Human-readable label for an install source.
 fn source_label(source: &str, remote: &str, user_remote: bool) -> String {
     match source {
-        "native" | "terra" => "RakuOS Linux".to_string(),
+        "native" | "terra" => "Fedora".to_string(),
         "flatpak" => {
             let base = if remote.is_empty() {
                 "Flathub".to_string()

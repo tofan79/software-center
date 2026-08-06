@@ -131,11 +131,11 @@ impl Tray for SoftwareTray {
     fn title(&self) -> String {
         match &self.status {
             TrayStatus::Available(count) => format!(
-                "RakuOS Software — {} update{} available",
+                "Software Center — {} update{} available",
                 count, if *count != 1 { "s" } else { "" }
             ),
-            TrayStatus::RebootRequired => "RakuOS Software — Reboot Required".into(),
-            _ => "RakuOS Software".into(),
+            TrayStatus::RebootRequired => "Software Center — Reboot Required".into(),
+            _ => "Software Center".into(),
         }
     }
 
@@ -158,7 +158,7 @@ impl Tray for SoftwareTray {
         use ksni::menu::*;
         vec![
             StandardItem {
-                label: "Open RakuOS Software".into(),
+                label: "Open Software Center".into(),
                 icon_name: "system-software-install".into(),
                 activate: Box::new(|t: &mut Self| { let _ = t.tx.send(DaemonMsg::OpenUi); }),
                 ..Default::default()
