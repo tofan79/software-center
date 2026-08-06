@@ -86,8 +86,10 @@ pub fn check_packages_script() -> Vec<serde_json::Value> {
         .args(["-q", "check-update"])
         .output();
     let Ok(out) = out else { return Vec::new() };
-    // Exit 0 = updates available, 1 = none. Anything else is a real error.
-    if !matches!(out.status.code(), Some(0) | Some(1)) {
+    // dnf5 check-update exit codes: 0 = no updates available, 100 = updates
+    // available, 1 = operation failed. Treat 100 as success and parse the
+    // listing; anything else is a real error.
+    if !matches!(out.status.code(), Some(0) | Some(100)) {
         return Vec::new();
     }
     let text = String::from_utf8_lossy(&out.stdout);
@@ -113,6 +115,7 @@ pub fn check_packages_script() -> Vec<serde_json::Value> {
             "current_version": installed_map.get(name).cloned().unwrap_or_default(),
             "available_version": new_evr,
             "repo": repo,
+            "repo_label": friendly_repo(repo),
         }));
     }
 
@@ -157,10 +160,10 @@ pub fn schedule_reboot() -> (bool, String) {
 
 // ── Internals ─────────────────────────────────────────────────────────────────
 
-/// Build a name → EVR map of all installed packages from `dnf5 -q list installed`.
+/// Build a name → EVR map of all installed packages from `dnf5 -q list --installed`.
 fn installed_evr_map() -> Option<HashMap<String, String>> {
     let out = Command::new("dnf5")
-        .args(["-q", "list", "installed"])
+        .args(["-q", "list", "--installed"])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -192,6 +195,38 @@ fn strip_arch(name_arch: &str) -> &str {
         }
     }
     name_arch
+}
+
+/// Human-readable label for a dnf5 repo id, so COPR/Terra/RPM Fusion/Fedora
+/// show up nicely instead of raw ids like
+/// "copr:copr.fedorainfracloud.org:lionheartp:Hyprland".
+fn friendly_repo(repo: &str) -> String {
+    if let Some(rest) = repo.strip_prefix("copr:copr.fedorainfracloud.org:") {
+        let mut parts = rest.splitn(2, ':');
+        return match (parts.next(), parts.next()) {
+            (Some(owner), Some(project)) => format!("COPR: {}/{}", owner, project),
+            _ => format!("COPR: {}", rest),
+        };
+    }
+    if repo == "terra" || repo.starts_with("terra-") {
+        return "Terra".to_string();
+    }
+    if repo.starts_with("rpmfusion-") {
+        let pretty = repo
+            .trim_start_matches("rpmfusion-")
+            .replace('-', " ");
+        return format!("RPM Fusion ({})", pretty);
+    }
+    if repo.starts_with("fedora") || repo == "updates" {
+        return "Fedora".to_string();
+    }
+    if repo.starts_with("brave") {
+        return "Brave Browser".to_string();
+    }
+    if let Some(rest) = repo.strip_prefix("copr:") {
+        return format!("COPR: {}", rest);
+    }
+    repo.to_string()
 }
 
 // ── AppStream enrichment for package update lists ─────────────────────────────
