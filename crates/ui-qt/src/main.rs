@@ -141,7 +141,7 @@ fn main() {
     // so they surface in the app log instead of vanishing on some setups.
     qmetaobject::init_qt_to_rust();
 
-    let qml_dir = std::env::var("RAKUOS_SOFTWARE_QML_DIR")
+    let qml_dir = std::env::var("SOFTWARE_CENTER_QML_DIR")
         .unwrap_or_else(|_| "/usr/share/software-center/qml".to_string());
     let qml_dir = std::fs::canonicalize(&qml_dir)
         .unwrap_or_else(|_| std::path::PathBuf::from(&qml_dir));

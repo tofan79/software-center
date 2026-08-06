@@ -57,16 +57,7 @@ fn daemon_cache_path() -> std::path::PathBuf {
 /// Checks sibling directory of this binary first (covers dev builds), then libexec.
 fn ui_binary() -> std::path::PathBuf {
     let libexec = std::path::Path::new("/usr/libexec/software-center");
-    let frontend = std::env::var("RAKUOS_SOFTWARE_FRONTEND")
-        .unwrap_or_default()
-        .to_lowercase();
-    let candidates: &[&str] = if frontend == "cosmic" {
-        &["rakuos-software-cosmic", "software-center", "rakuos-software-gtk", "rakuos-software-qt"]
-    } else if frontend == "gtk" {
-        &["rakuos-software-gtk", "software-center", "rakuos-software-qt", "rakuos-software-cosmic"]
-    } else {
-        &["software-center", "rakuos-software-qt", "rakuos-software-gtk", "rakuos-software-cosmic"]
-    };
+    let candidates: &[&str] = &["software-center"];
 
     // Check sibling directory (dev builds in target/debug/)
     if let Ok(exe) = std::env::current_exe() {

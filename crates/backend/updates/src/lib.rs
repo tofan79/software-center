@@ -29,7 +29,7 @@ pub struct UpdateInfo {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Get basic system info: OS release name/version and running kernel.
-/// Replaces the bootc image status of the original RakuOS code.
+/// Replaces the bootc image status used by the original RakuOS software center.
 pub fn get_system_status() -> SystemStatus {
     let read_os_release = |key: &str| -> String {
         std::fs::read_to_string("/etc/os-release")

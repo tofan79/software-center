@@ -19,7 +19,7 @@ pub struct SourceOption {
     pub source: String,       // "native", "flatpak", "terra"
     pub package_name: String,
     pub installed: bool,
-    pub label: String,        // "RakuOS Linux" or "Flathub" / remote title
+    pub label: String,        // "Fedora" or "Flathub" / remote title
     pub remote: String,       // flatpak remote name
     #[serde(default)]
     pub user_remote: bool,    // true if this is a user-scoped flatpak remote
@@ -913,7 +913,7 @@ fn build_sources(
         }
     }
 
-    // Native/RakuOS Linux always first in the dropdown
+    // Native/Fedora always first in the dropdown
     sources.sort_by_key(|s| if s.source == "flatpak" { 1u8 } else { 0 });
     sources
 }
@@ -1272,7 +1272,7 @@ fn rpm_is_installed(pkg: &str) -> bool {
 fn get_installed_packages() -> Result<HashSet<String>> {
     // For available() / search() / get_by_category() we use packages.list if present,
     // so the installed badge is accurate without querying the entire rpm database.
-    // Fall back to rpm -qa only when packages.list doesn't exist (non-RakuOS systems).
+    // Fall back to rpm -qa only when packages.list doesn't exist (traditional Fedora).
     let list = read_packages_list();
     if !list.is_empty() {
         let mut resolved = HashSet::new();
@@ -1294,7 +1294,7 @@ fn get_installed_packages() -> Result<HashSet<String>> {
         }
         return Ok(resolved);
     }
-    // Non-RakuOS fallback
+    // Traditional Fedora fallback
     let out = Command::new("rpm")
         .args(["-qa", "--queryformat", "%{NAME}\\n"])
         .output()?;

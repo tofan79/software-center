@@ -128,7 +128,8 @@ pub async fn load_all() -> (Vec<HomeApp>, Vec<HomeApp>, Vec<HomeApp>, Vec<HomeAp
     (picks, popular, updated, new)
 }
 
-/// Editor's picks — tries rakuos.org with short timeout, falls back to FALLBACK_PICKS.
+/// Editor's picks — tries the upstream picks endpoint with short timeout,
+/// falls back to FALLBACK_PICKS.
 pub async fn get_picks(appstream: &HashMap<String, AppInfo>) -> Vec<HomeApp> {
     let cache = cache_path("picks.json");
     if cache_valid(&cache) {
@@ -281,7 +282,7 @@ fn write_cache(path: &PathBuf, data: &Vec<HomeApp>) {
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
     let resp = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "RakuOS-Software/1.0")
+        .header("User-Agent", "Software-Center/1.0")
         .timeout(Duration::from_secs(3))
         .send()
         .await?
@@ -293,7 +294,7 @@ async fn fetch_json(url: &str) -> Result<serde_json::Value> {
 async fn fetch_feed_apps(url: &str, appstream: &HashMap<String, AppInfo>) -> Vec<HomeApp> {
     let Ok(resp) = reqwest::Client::new()
         .get(url)
-        .header("User-Agent", "RakuOS-Software/1.0")
+        .header("User-Agent", "Software-Center/1.0")
         .timeout(Duration::from_secs(8))
         .send()
         .await

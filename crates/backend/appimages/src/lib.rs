@@ -659,7 +659,7 @@ fn write_desktop(app_id: &str, name: &str, exec_path: &str, icon_path: &str, inf
     };
     let icon = if icon_path.is_empty() { "application-x-executable" } else { icon_path };
     let content = format!(
-        "[Desktop Entry]\nName={}\nComment={}\nExec=\"{}\" %U\nIcon={}\nTerminal=false\nType=Application\nCategories={}\nStartupNotify=true\nX-RakuOS-AppImage=true\nX-RakuOS-AppImage-ID={}\n",
+        "[Desktop Entry]\nName={}\nComment={}\nExec=\"{}\" %U\nIcon={}\nTerminal=false\nType=Application\nCategories={}\nStartupNotify=true\nX-SoftwareCenter-AppImage=true\nX-SoftwareCenter-AppImage-ID={}\n",
         name, info.summary, exec_path, icon, cats, app_id
     );
     let desktop_path = desktop_dir().join(format!("{}{}.desktop", DESKTOP_PREFIX, app_id));
@@ -796,7 +796,7 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
     let api_url = normalize_github_url(&app.update_url);
     let resp = reqwest::Client::new()
         .get(&api_url)
-        .header("User-Agent", "RakuOS-Software/1.0")
+        .header("User-Agent", "Software-Center/1.0")
         .header("Accept", "application/vnd.github+json")
         .send().await.ok()?
         .json::<serde_json::Value>().await.ok()?;
@@ -824,7 +824,7 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
     let api_url = normalize_gitlab_url(&app.update_url);
     let releases = reqwest::Client::new()
         .get(&api_url)
-        .header("User-Agent", "RakuOS-Software/1.0")
+        .header("User-Agent", "Software-Center/1.0")
         .send().await.ok()?
         .json::<serde_json::Value>().await.ok()?;
 
@@ -855,7 +855,7 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
 async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
     let client = reqwest::Client::new();
     let resp = client.head(&app.update_url)
-        .header("User-Agent", "RakuOS-Software/1.0")
+        .header("User-Agent", "Software-Center/1.0")
         .send().await.ok()?;
 
     let etag = resp.headers().get("etag")
@@ -937,7 +937,7 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str) -> impl Iterator
         let tmp_path = install_dir().join(format!("{}.AppImage.tmp", app_id));
         let client = reqwest::Client::new();
         let resp = match client.get(&download_url)
-            .header("User-Agent", "RakuOS-Software/1.0")
+            .header("User-Agent", "Software-Center/1.0")
             .send().await
         {
             Ok(r) => r,

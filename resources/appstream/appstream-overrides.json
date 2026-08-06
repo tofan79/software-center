@@ -1,5 +1,5 @@
 {
-  "_comment": "RakuOS AppStream metadata overrides. Add entries here to fix wrong or missing app names/summaries.",
+  "_comment": "Software Center AppStream metadata overrides. Add entries here to fix wrong or missing app names/summaries.",
   "_format": {
     "key": "app-id or flatpak:app-id",
     "fields": "name, summary, description, categories (all optional)"

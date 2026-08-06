@@ -1,4 +1,4 @@
-// rakuos-appstream — AppStream metadata parsing and caching
+// scenter-appstream — AppStream metadata parsing and caching
 //
 // Reads compressed AppStream XML from /usr/share/swcatalog/xml/*.xml.gz
 // and the overrides from /usr/share/software-center/appstream/appstream-overrides.json.
@@ -96,7 +96,7 @@ pub struct AppInfo {
 // ── Paths ─────────────────────────────────────────────────────────────────────
 
 const SWCATALOG_DIR: &str = "/usr/share/swcatalog/xml";
-const RAKUOS_APPSTREAM_DIR: &str = "/usr/share/software-center/appstream/data";
+const APPSTREAM_DATA_DIR: &str = "/usr/share/software-center/appstream/data";
 const APP_INFO_XMLS: &str = "/usr/share/app-info/xmls";
 const APP_INFO_XMLS_CACHE: &str = "/var/cache/app-info/xmls";
 const OVERRIDES_PATH: &str = "/usr/share/software-center/appstream/appstream-overrides.json";
@@ -180,8 +180,8 @@ fn load_appstream_inner() -> Result<HashMap<String, AppInfo>> {
     let mut apps: HashMap<String, AppInfo> = HashMap::new();
     let mut xml_files: Vec<PathBuf> = Vec::new();
 
-    // RakuOS custom entries (highest priority, plain .xml)
-    scan_appstream_files(Path::new(RAKUOS_APPSTREAM_DIR), &mut xml_files, 3);
+    // Bundled custom entries (highest priority, plain .xml)
+    scan_appstream_files(Path::new(APPSTREAM_DATA_DIR), &mut xml_files, 3);
 
     // System swcatalog (native + terra; mix of .xml and .xml.gz)
     scan_appstream_files(Path::new(SWCATALOG_DIR), &mut xml_files, 2);

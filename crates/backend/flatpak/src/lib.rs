@@ -1,4 +1,4 @@
-// rakuos-flatpak — Flatpak package management
+// scenter-flatpak — Flatpak package management
 // Mirrors src/backend/flatpak.py
 
 use anyhow::Result;
@@ -12,6 +12,8 @@ const FLATHUB_URL: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
 const COSMIC_REPO_URL: &str = "https://apt.pop-os.org/cosmic/cosmic.flatpakrepo";
 /// Marker used to detect whether the system ships the COSMIC welcome app,
 /// which is what gates whether the COSMIC remote buttons should be shown.
+/// Only present in the original RakuOS builds; absent here, so the COSMIC
+/// remote buttons stay hidden on stock Fedora.
 const COSMIC_WELCOME_BIN: &str = "/usr/libexec/software-center/rakuos-welcome-cosmic";
 
 // ── Data types ────────────────────────────────────────────────────────────────
@@ -214,7 +216,7 @@ fn default_system() -> String { "system".to_string() }
 
 /// Return all available Flatpak updates (apps + runtimes) by querying `flatpak`
 /// directly for both the system and user installations — no separate
-/// `rakuos-update`/sudo round-trip, since `flatpak remote-ls --updates` is a
+/// `updates`/sudo round-trip, since `flatpak remote-ls --updates` is a
 /// read-only query that doesn't need elevated privileges either way.
 /// Each entry is enriched with icon_path/icon_url from the AppStream cache.
 pub fn get_all_updates() -> Vec<FlatpakUpdate> {
