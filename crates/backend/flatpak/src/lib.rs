@@ -377,8 +377,7 @@ pub fn update_stream() -> impl Iterator<Item = String> {
 }
 
 /// Update a single Flatpak app. Streams output lines.
-pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<Item = String> {
-    let scope = if installation == "user" { "--user" } else { "--system" };
+pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<Item = String> {    let scope = if installation == "user" { "--user" } else { "--system" };
     let owned: Vec<String> = ["update", scope, "--app", "--noninteractive", "-y", app_id]
         .iter()
         .map(|s| s.to_string())
@@ -386,9 +385,16 @@ pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<I
     run_flatpak_stream_owned(owned)
 }
 
+/// Remove unused Flatpak runtimes/extensions (global cache cleanup).
+/// User-scoped unused refs are pruned first, then system-wide via pkexec.
+pub fn clean_unused_stream() -> impl Iterator<Item = String> {
+    let user = run_flatpak_stream(&["uninstall", "--unused", "-y", "--noninteractive", "--user"]);
+    let system = run_pkexec_flatpak_stream(&["uninstall", "--unused", "-y", "--noninteractive", "--system"]);
+    user.chain(system)
+}
+
 /// Update an already-installed Flatpak runtime branch (patch update).
-pub fn update_runtime_stream(app_id: &str, branch: &str, installation: &str) -> impl Iterator<Item = String> {
-    let scope = if installation == "user" { "--user" } else { "--system" };
+pub fn update_runtime_stream(app_id: &str, branch: &str, installation: &str) -> impl Iterator<Item = String> {    let scope = if installation == "user" { "--user" } else { "--system" };
     let ref_spec = format!("{}//{}", app_id, branch);
     let owned: Vec<String> = ["update", scope, "--noninteractive", "-y", &ref_spec]
         .iter()

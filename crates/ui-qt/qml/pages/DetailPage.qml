@@ -9,15 +9,25 @@ Item {
     property var app: null
     signal backRequested()
 
-    function loadApp(appData) {
-        app = appData;
-        screenshotIndex = 0;
+    // The source the user clicked in search/list (e.g. "flatpak", "native",
+    // "appimage"). Kept so the detail page stays on that source instead of
+    // making the user pick Fedora/Flathub again.
+    property string preferredSource: ""
 
-        // Default: native (index 0).
-        // Exception: if native is NOT installed but another source IS, select that source.
-        // If both are installed, prefer native (index 0).
+    function _selectBestSource(appData) {
         var bestIdx = 0;
         if (Array.isArray(appData.sources) && appData.sources.length > 1) {
+            // 1) Honor the source the user clicked on
+            if (detailPage.preferredSource !== "") {
+                for (var p = 0; p < appData.sources.length; p++) {
+                    if (appData.sources[p].source === detailPage.preferredSource) {
+                        bestIdx = p;
+                        return bestIdx;
+                    }
+                }
+            }
+            // 2) Default: native (index 0); pick the installed source if native
+            //    is not installed but another one is.
             if (!appData.sources[0].installed) {
                 for (var i = 1; i < appData.sources.length; i++) {
                     if (appData.sources[i].installed) {
@@ -27,7 +37,14 @@ Item {
                 }
             }
         }
-        sourceSelector.currentIndex = bestIdx;
+        return bestIdx;
+    }
+
+    function loadApp(appData) {
+        app = appData;
+        screenshotIndex = 0;
+        preferredSource = appData.source || "";
+        sourceSelector.currentIndex = _selectBestSource(appData);
         _reloadScreenshots();
         _loadAddons();
 
@@ -162,6 +179,7 @@ Item {
                     var fullApp = JSON.parse(json);
                     if (fullApp && fullApp.id) {
                         detailPage.app = fullApp;
+                        detailPage.sourceSelector.currentIndex = detailPage._selectBestSource(fullApp);
                         detailPage._reloadScreenshots();
                         detailPage._loadAddons();
                     }
@@ -745,7 +763,7 @@ Item {
                                 ComboBox {
                                     id: updateSourceCombo
                                     Layout.fillWidth: true
-                                    model: ["none", "github", "gitlab", "url"]
+                                    model: ["none", "github", "gitlab", "codeberg", "forgejo", "url"]
                                     Component.onCompleted: {
                                         if (app && app.update_source) {
                                             var idx = model.indexOf(app.update_source);
@@ -772,7 +790,7 @@ Item {
                                 visible: updateSourceCombo.currentText !== "none"
 
                                 Label {
-                                    text: updateSourceCombo.currentText === "github" ? "owner/repo"
+                                    text: updateSourceCombo.currentText === "github" || updateSourceCombo.currentText === "codeberg" || updateSourceCombo.currentText === "forgejo" ? "owner/repo"
                                         : updateSourceCombo.currentText === "gitlab" ? "namespace/repo"
                                         : "URL"
                                     font.pixelSize: 12
@@ -783,6 +801,8 @@ Item {
                                     id: updateUrlField
                                     Layout.fillWidth: true
                                     placeholderText: updateSourceCombo.currentText === "github" ? "e.g. owner/myapp"
+                                                   : updateSourceCombo.currentText === "codeberg" ? "e.g. owner/myapp"
+                                                   : updateSourceCombo.currentText === "forgejo" ? "e.g. https://git.example.org/owner/myapp"
                                                    : updateSourceCombo.currentText === "gitlab"  ? "e.g. group/myapp"
                                                    : "https://example.com/releases/latest"
                                     text: app ? (app.update_url || "") : ""
@@ -811,6 +831,21 @@ Item {
                                 }
                             }
 
+                            // Pre-releases
+                            RowLayout {
+                                width: parent.width
+                                spacing: 12
+                                visible: updateSourceCombo.currentText === "github"
+                                         || updateSourceCombo.currentText === "codeberg"
+                                         || updateSourceCombo.currentText === "forgejo"
+
+                                CheckBox {
+                                    id: prereleaseCheck
+                                    text: "Allow pre-releases"
+                                    font.pixelSize: 12
+                                }
+                            }
+
                             // Save button + status
                             RowLayout {
                                 width: parent.width
@@ -825,7 +860,8 @@ Item {
                                             app.id || "",
                                             updateSourceCombo.currentText,
                                             updateUrlField.text.trim(),
-                                            updatePatternField.text.trim()
+                                            updatePatternField.text.trim(),
+                                            prereleaseCheck.checked
                                         ));
                                         saveStatusLabel.text = result.ok ? "✓ Saved" : "✗ " + result.msg;
                                         saveStatusLabel.color = result.ok ? "#4caf50" : "#e53935";
@@ -1007,6 +1043,7 @@ Item {
             updateSourceCombo.currentIndex = idx >= 0 ? idx : 0;
             updateUrlField.text = app.update_url || "";
             updatePatternField.text = app.update_pattern || "";
+            prereleaseCheck.checked = !!app.allow_prerelease;
         }
     }
 }

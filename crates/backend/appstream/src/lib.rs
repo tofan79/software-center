@@ -91,6 +91,8 @@ pub struct AppInfo {
     pub pkg_name_guessed: bool,   // true when package_name was guessed from id, not from <pkgname>
     #[serde(default)]
     pub remotes: Vec<String>,     // all flatpak remote names this app id was found in (e.g. ["flathub", "cosmic"]); empty for non-flatpak sources
+    #[serde(default)]
+    pub component_type: String,   // appstream component type: "desktop", "desktop-application", "font", "codec", ...
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -540,6 +542,7 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                         current = Some(AppInfo {
                             source: source.to_string(),
                             is_addon: kind == "addon",
+                            component_type: kind.clone(),
                             remotes: if remote.is_empty() { Vec::new() } else { vec![remote.clone()] },
                             ..Default::default()
                         });

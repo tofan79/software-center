@@ -464,12 +464,13 @@ pub struct SoftwareBackend {
 
     // ── AppImage settings ─────────────────────────────────────────────────────
 
-    saveAppImageSettings: qt_method!(fn saveAppImageSettings(&mut self, id: QString, update_source: QString, update_url: QString, update_pattern: QString) -> QString {
+    saveAppImageSettings: qt_method!(fn saveAppImageSettings(&mut self, id: QString, update_source: QString, update_url: QString, update_pattern: QString, allow_prerelease: bool) -> QString {
         let (ok, msg) = scenter_appimages::save_settings(
             &id.to_string(),
             &update_source.to_string(),
             &update_url.to_string(),
             &update_pattern.to_string(),
+            allow_prerelease,
         );
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
@@ -615,6 +616,185 @@ pub struct SoftwareBackend {
                 }
             }
             shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    // ── Repositories page ─────────────────────────────────────────────────────
+
+    /// List all dnf repositories (enabled + disabled) as JSON array.
+    /// [{"id","name","enabled","kind","owner","project"}]
+    listRepos: qt_method!(fn listRepos(&mut self) -> QString {
+        let repos: Vec<serde_json::Value> = scenter_updates::list_dnf_repos()
+            .into_iter()
+            .map(|r| serde_json::json!({
+                "id":      r.id,
+                "name":    r.name,
+                "enabled": r.enabled,
+                "kind":    r.kind,
+                "owner":   r.owner,
+                "project": r.project,
+            }))
+            .collect();
+        serde_json::to_string(&repos).unwrap_or_else(|_| "[]".to_string()).into()
+    }),
+
+    /// List orphaned (unused dependency) packages as JSON array of names.
+    listUnusedPackages: qt_method!(fn listUnusedPackages(&mut self) -> QString {
+        serde_json::to_string(&scenter_updates::list_unused_packages())
+            .unwrap_or_else(|_| "[]".to_string())
+            .into()
+    }),
+
+    /// Enable/disable any dnf repo by id. COPR repos route through the dnf5
+    /// copr plugin (owner/project), system repos via config-manager.
+    setRepoEnabled: qt_method!(fn setRepoEnabled(&mut self, id: QString, enabled: bool) {
+        let id = id.to_string();
+        let enabled = enabled;
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let owner_project = repo_owner_project(&id);
+            let msg = format!("{} repository {}...\n", if enabled { "Enabling" } else { "Disabling" }, id);
+            let _ = std::fs::write(log_path(), msg);
+            let mut exit_code = 1i32;
+            let iter: Box<dyn Iterator<Item = String> + Send> = if id.starts_with("copr:") {
+                if owner_project.is_empty() {
+                    append_log("Cannot parse COPR owner/project");
+                    shared.result.store(2, Ordering::Relaxed);
+                    shared.running.store(false, Ordering::Relaxed);
+                    return;
+                }
+                if enabled {
+                    Box::new(scenter_updates::enable_copr_stream(&owner_project))
+                } else {
+                    Box::new(scenter_updates::disable_copr_stream(&owner_project))
+                }
+            } else {
+                Box::new(scenter_updates::set_repo_enabled_stream(&id, enabled))
+            };
+            for line in iter {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Add/enable a COPR repo from the UI ("owner/project"). Runs pkexec.
+    addCopr: qt_method!(fn addCopr(&mut self, owner_project: QString) {
+        let owner_project = owner_project.to_string().trim().to_string();
+        if owner_project.is_empty() || !owner_project.contains('/') {
+            let _ = std::fs::write(log_path(), "Invalid COPR spec. Use owner/project (e.g. tofan79/software-center).\n");
+            return;
+        }
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), format!("Adding COPR {}...\n", owner_project));
+            let mut exit_code = 1i32;
+            for line in scenter_updates::enable_copr_stream(&owner_project) {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Remove a COPR repo entirely (deletes its .repo file). Runs pkexec.
+    removeCopr: qt_method!(fn removeCopr(&mut self, owner_project: QString) {
+        let owner_project = owner_project.to_string().trim().to_string();
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), format!("Removing COPR {}...\n", owner_project));
+            let mut exit_code = 1i32;
+            for line in scenter_updates::remove_copr_stream(&owner_project) {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Clear the dnf metadata cache. Runs pkexec.
+    cleanDnfCache: qt_method!(fn cleanDnfCache(&mut self) {
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), "Cleaning dnf cache...\n");
+            let mut exit_code = 1i32;
+            for line in scenter_updates::clean_dnf_stream() {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Remove unused/orphan packages (dnf autoremove). Runs pkexec.
+    removeUnusedPackages: qt_method!(fn removeUnusedPackages(&mut self) {
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), "Removing unused packages (dnf autoremove)...\n");
+            let mut exit_code = 1i32;
+            for line in scenter_updates::autoremove_stream() {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Remove unused Flatpak runtimes/extensions. Global cache cleanup.
+    cleanFlatpakUnused: qt_method!(fn cleanFlatpakUnused(&mut self) {
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), "Removing unused Flatpak runtimes...\n");
+            let mut exit_code = 1i32;
+            for line in scenter_flatpak::clean_unused_stream() {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    /// Remove orphaned AppImage files (stale downloads, unreferenced binaries,
+    /// sidecars whose binary is gone). Quick local op, no root.
+    cleanAppImageCache: qt_method!(fn cleanAppImageCache(&mut self) {
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let (count, msg) = scenter_appimages::cleanup_orphans();
+            let _ = std::fs::write(log_path(), format!("{}\n", msg));
+            shared.result.store(if count >= 0 { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
     }),
@@ -1347,4 +1527,16 @@ fn parse_install_progress(line: &str) -> Option<i32> {
         }
     }
     None
+}
+
+/// Extract "owner/project" from a COPR repo id like
+/// "copr:copr.fedorainfracloud.org:owner:project".
+fn repo_owner_project(id: &str) -> String {
+    let mut parts = id.splitn(4, ':');
+    let _prefix = parts.next();
+    let _host = parts.next();
+    match (parts.next(), parts.next()) {
+        (Some(owner), Some(project)) => format!("{}/{}", owner, project),
+        _ => String::new(),
+    }
 }

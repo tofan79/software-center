@@ -146,6 +146,15 @@ fn fp_bare(id: &str) -> &str {
     id.strip_suffix(".desktop").unwrap_or(id)
 }
 
+/// True when an AppStream component is a real GUI application (as opposed to
+/// fonts, codecs, localization/langpacks, inputmethods, drivers, etc.).
+fn is_desktop_component(a: &scenter_appstream::AppInfo) -> bool {
+    matches!(
+        a.component_type.as_str(),
+        "desktop" | "desktop-application"
+    )
+}
+
 /// Check whether a flatpak ID (with or without .desktop suffix) is installed.
 fn fp_installed(installed_fp: &HashSet<String>, id: &str) -> bool {
     installed_fp.contains(fp_bare(id))
@@ -285,28 +294,7 @@ pub fn get_installed() -> Result<Vec<NativeApp>> {
         && !std::path::Path::new(LOCAL_RPM_LIST).exists()
     {
         let installed = get_installed_packages().unwrap_or_default();
-
-        // 1) Apps present in the AppStream catalog (Fedora/Flathub-sourced RPMS)
-        //    get full metadata: name, summary, icon from the catalog.
-        let mut names: Vec<&String> = installed.iter().collect();
-        names.sort();
-        for name in names {
-            if let Some(meta) = pkg_map.get(name) {
-                let mut app = NativeApp::from(*meta);
-                app.installed = true;
-                app.source = "native".to_string();
-                if app.icon_path.is_empty() {
-                    app.icon_path = find_local_rpm_icon(name);
-                }
-                results.push(app);
-            }
-        }
-
-        // 2) Remaining GUI apps (COPR/Terra/third-party RPMs) — enumerate
-        //    /usr/share/applications/*.desktop and resolve the owning package.
-        let already: std::collections::HashSet<String> =
-            results.iter().map(|a| a.package_name.clone()).collect();
-        results.extend(scan_installed_desktop_apps(&pkg_map, &already, &installed));
+        results.extend(installed_traditional_gui(&installed));
     }
 
     results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
@@ -316,13 +304,58 @@ pub fn get_installed() -> Result<Vec<NativeApp>> {
     Ok(results)
 }
 
+/// Installed GUI applications resolved from the rpm database on traditional
+/// (non-atomic) Fedora: AppStream catalog entries whose package is installed
+/// (restricted to real desktop apps, not fonts/codecs/langpacks), plus
+/// COPR/Terra/third-party apps found by scanning /usr/share/applications.
+/// Used by both the Installed tab and as the "already installed" input for
+/// search results so installed apps always surface with an Installed badge.
+fn installed_traditional_gui(installed: &HashSet<String>) -> Vec<NativeApp> {
+    let appstream = get_appstream();
+    let mut pkg_map: HashMap<String, &AppInfo> = HashMap::new();
+    for a in appstream.values() {
+        if a.is_addon || a.package_name.is_empty() {
+            continue;
+        }
+        pkg_map.entry(a.package_name.clone()).or_insert(a);
+    }
+
+    let mut results: Vec<NativeApp> = Vec::new();
+
+    // 1) Apps present in the AppStream catalog (Fedora/Flathub-sourced RPMS)
+    //    get full metadata: name, summary, icon from the catalog.
+    let mut names: Vec<&String> = installed.iter().collect();
+    names.sort();
+    for name in names {
+        if let Some(meta) = pkg_map.get(name) {
+            if !is_desktop_component(meta) {
+                continue;
+            }
+            let mut app = NativeApp::from(*meta);
+            app.installed = true;
+            app.source = "native".to_string();
+            if app.icon_path.is_empty() {
+                app.icon_path = find_local_rpm_icon(name);
+            }
+            results.push(app);
+        }
+    }
+
+    // 2) Remaining GUI apps (COPR/Terra/third-party RPMs) — enumerate
+    //    /usr/share/applications/*.desktop and resolve the owning package.
+    let mut already: HashSet<String> =
+        results.iter().map(|a| a.package_name.clone()).collect();
+    results.extend(scan_installed_desktop_apps(&pkg_map, &mut already, installed));
+    results
+}
+
 /// Enumerate GUI applications installed outside the AppStream catalog by
 /// scanning /usr/share/applications/*.desktop and resolving each file's owning
 /// package via `rpm -qf`. Covers COPR/Terra/third-party RPM apps on traditional
 /// (non-atomic) Fedora.
 fn scan_installed_desktop_apps(
     pkg_map: &std::collections::HashMap<String, &scenter_appstream::AppInfo>,
-    already: &std::collections::HashSet<String>,
+    already: &mut std::collections::HashSet<String>,
     installed: &std::collections::HashSet<String>,
 ) -> Vec<NativeApp> {
     let mut out = Vec::new();
@@ -369,7 +402,7 @@ fn scan_installed_desktop_apps(
 
         // Owning package for this desktop file.
         let Ok(q) = Command::new("rpm")
-            .args(["-q", "--queryformat", "%{NAME}", path.to_str().unwrap_or("")])
+            .args(["-qf", "--queryformat", "%{NAME}", path.to_str().unwrap_or("")])
             .output()
         else {
             continue;
@@ -410,6 +443,7 @@ fn scan_installed_desktop_apps(
         if app.icon_path.is_empty() {
             app.icon_path = find_local_rpm_icon(&pkg);
         }
+        already.insert(pkg);
         out.push(app);
     }
     out
@@ -524,7 +558,8 @@ pub fn get_installed_flatpaks_enriched() -> Result<Vec<NativeApp>> {
 
 /// Search all apps (native + flatpak) by name, summary, id, or keywords.
 /// Results ranked: name-starts-with > name-contains > id/pkg-contains > summary > keyword.
-/// Apps with both a native and a Flatpak source are merged into one result.
+/// Each result keeps its own source (DNF/Flatpak/AppImage) so the UI can show
+/// them in separate groups instead of merging multiple sources into one row.
 pub fn search(query: &str) -> Result<Vec<NativeApp>> {
     let appstream = get_appstream();
     let installed_rpm = get_installed_packages()?;
@@ -547,50 +582,88 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
         let pkg_lc = app.package_name.to_lowercase();
         let summary_lc = app.summary.to_lowercase();
 
+        // Summary/keyword substring matches only make sense for longer queries —
+        // short ones ("zed", "net") otherwise match inside every "...ized" word.
         let score = if name_lc.starts_with(&q) { 6 }
             else if name_lc.contains(&q) { 5 }
             else if id_lc.contains(&q) || pkg_lc.contains(&q) { 4 }
-            else if summary_lc.contains(&q) { 3 }
-            else if app.keywords.iter().any(|k| k.to_lowercase().contains(&q)) { 2 }
+            else if q.len() >= 4 && summary_lc.contains(&q) { 3 }
+            else if q.len() >= 4 && app.keywords.iter().any(|k| k.to_lowercase().contains(&q)) { 2 }
             else { continue };
 
         scored.push((score, app));
     }
 
-    // Merge same-name apps across sources, keeping best score per name
-    let mut by_name: HashMap<String, (u8, NativeApp)> = HashMap::new();
-    for (score, app) in scored {
-        let key = app.name.to_lowercase();
-        if let Some(existing) = by_name.get_mut(&key) {
-            if score > existing.0 {
-                // New entry scores higher — it becomes primary, old becomes alt
-                let old = std::mem::replace(&mut existing.1, app);
-                existing.0 = score;
-                existing.1.sources.push(source_option_from_native_app(&old));
-            } else {
-                existing.1.sources.push(source_option_from_native_app(&app));
-            }
+    // Installed GUI apps not present in the AppStream catalog (COPR/Terra/
+    // third-party RPMs). These must surface in search results with an
+    // "Installed" badge so users don't try to install a duplicate (e.g. an
+    // already-installed RPM app also offered as a Flatpak).
+    let mut seen_pkgs: HashSet<String> =
+        scored.iter().map(|(_, a)| a.package_name.clone()).collect();
+    for app in installed_traditional_gui(&installed_rpm) {
+        if seen_pkgs.contains(&app.package_name) {
+            continue;
+        }
+        let name_lc = app.name.to_lowercase();
+        let pkg_lc = app.package_name.to_lowercase();
+        if name_lc.starts_with(&q) || name_lc.contains(&q) || pkg_lc.contains(&q) {
+            seen_pkgs.insert(app.package_name.clone());
+            scored.push((5, app));
+        }
+    }
+
+    // Packages available in ANY active dnf repository (Fedora, updates,
+    // RPM Fusion, Terra, COPR, third-party). Matches by package name only and
+    // skips library/dev noise, so e.g. searching "zed" also finds the COPR/Terra
+    // build alongside the Flatpak instead of only official repos.
+    for p in get_repo_packages() {
+        if seen_pkgs.contains(&p.name) {
+            continue;
+        }
+        let nlc = p.name.to_lowercase();
+        // Prefix match always; substring match only for longer queries to avoid
+        // flooding short queries ("zed") with -sized/-parameterized/-localized
+        // packages from the full repository index.
+        let score = if nlc.starts_with(&q) {
+            5
+        } else if q.len() >= 5 && nlc.contains(&q) {
+            4
         } else {
-            by_name.insert(key, (score, app));
+            continue;
+        };
+        if is_repo_pkg_noise(&p.name) {
+            continue;
         }
+        seen_pkgs.insert(p.name.clone());
+        scored.push((
+            score,
+            NativeApp {
+                id: p.name.clone(),
+                name: p.name.clone(),
+                summary: p.summary,
+                package_name: p.name.clone(),
+                source: "native".to_string(),
+                installed: installed_rpm.contains(&p.name),
+                ..Default::default()
+            },
+        ));
     }
 
-    // For entries that gained sources, prepend the primary as sources[0]
-    for (_, app) in by_name.values_mut() {
-        if !app.sources.is_empty() {
-            let primary_src = source_option_from_native_app(app);
-            app.sources.insert(0, primary_src);
-            // Prefer native/terra as primary; re-sort if needed
-            app.sources.sort_by_key(|s| if s.source == "flatpak" { 1u8 } else { 0 });
-            // Sync installed flag: true if any source is installed
-            app.installed = app.sources.iter().any(|s| s.installed);
+    // No name-merging: every result keeps its own source (DNF / Flatpak /
+    // AppImage) so the UI can group them like Shelly does. The same app
+    // available as an RPM and on Flathub appears as separate entries, each with
+    // its own install path — there is no "pick Fedora or Flathub" inside a row.
+    scored.sort_by(|a, b| {
+        b.0.cmp(&a.0).then(a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+    });
+    let mut apps: Vec<NativeApp> = Vec::with_capacity(scored.len());
+    let mut seen_keys: HashSet<(String, String)> = HashSet::new();
+    for (_, a) in scored {
+        let key = (a.source.clone(), a.id.clone());
+        if seen_keys.insert(key) {
+            apps.push(a);
         }
     }
-
-    let mut results: Vec<(u8, NativeApp)> = by_name.into_values().collect();
-    results.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.name.cmp(&b.1.name)));
-    let mut apps: Vec<NativeApp> = results.into_iter().map(|(_, a)| a).collect();
-    enrich_sources(&mut apps, &appstream, &installed_rpm, &installed_fp);
     Ok(apps)
 }
 
@@ -1155,6 +1228,120 @@ pub fn is_installed(package_name: &str) -> bool {
 
 const PACKAGES_LIST: &str = "/var/lib/software-center/packages.list";
 const LOCAL_RPM_LIST: &str = "/var/lib/software-center/packages-rpm.list";
+
+// ── Active-repo package index (search fallback) ───────────────────────────────
+
+/// One package offered by any currently-enabled dnf repository.
+#[derive(Debug, Clone)]
+struct RepoPkg {
+    name: String,
+    summary: String,
+}
+
+const REPO_CACHE_TTL_SECS: u64 = 4 * 3600;
+const REPO_QUERY_TIMEOUT_SECS: u64 = 180;
+
+/// True for package names that are clearly not standalone applications
+/// (development/debug/support/translation splits). Keeps search results from
+/// being flooded with `-devel`, `-debuginfo`, `-langpack` noise when matching
+/// against the full repository package list.
+fn is_repo_pkg_noise(name: &str) -> bool {
+    let n = name.to_lowercase();
+    [
+        "-devel", "-debuginfo", "-debugsource", "-static", "-doc", "-docs",
+        "-headers", "-libs", "-lib", "-data", "-common", "-langpack",
+        "-langpacks", "-tests", "-test", "-help", "-src", "-source", "-sdk",
+    ]
+    .iter()
+    .any(|s| n.ends_with(s))
+}
+
+fn repo_cache_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(home).join(".cache"));
+    base.join("software-center").join("repoquery.tsv")
+}
+
+fn parse_repo_cache(text: &str) -> Vec<RepoPkg> {
+    let mut pkgs: Vec<RepoPkg> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for line in text.lines() {
+        let mut it = line.split('\t');
+        let (Some(name), Some(summary)) = (it.next(), it.next()) else { continue };
+        if name.is_empty() || !seen.insert(name) {
+            continue;
+        }
+        pkgs.push(RepoPkg {
+            name: name.to_string(),
+            summary: summary.trim().to_string(),
+        });
+    }
+    pkgs
+}
+
+/// All packages available in enabled repositories, cached to disk for 4h.
+/// Runs `dnf5 -y repoquery` (auto-accepts any missing repo GPG key prompt and
+/// queries every enabled repo: Fedora, updates, RPM Fusion, Terra, COPRs,
+/// third-party). Callers must run this off the UI thread — the first call can
+/// take a while.
+fn get_repo_packages() -> Vec<RepoPkg> {
+    let path = repo_cache_path();
+    if let Ok(meta) = path.metadata() {
+        if let Ok(modified) = meta.modified() {
+            if modified.elapsed().map(|e| e.as_secs() < REPO_CACHE_TTL_SECS).unwrap_or(false) {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    let pkgs = parse_repo_cache(&text);
+                    if !pkgs.is_empty() {
+                        return pkgs;
+                    }
+                }
+            }
+        }
+    }
+
+    let Ok(mut child) = Command::new("dnf5")
+        .args(["-y", "repoquery", "--qf", "%{name}\t%{summary}\t%{reponame}\n"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Vec::new();
+    };
+    let mut child_stdout = child.stdout.take();
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(s) = &mut child_stdout {
+            let _ = std::io::Read::read_to_end(s, &mut buf);
+        }
+        buf
+    });
+
+    let mut waited: u64 = 0;
+    loop {
+        if let Ok(Some(_)) = child.try_wait() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        waited += 250;
+        if waited >= REPO_QUERY_TIMEOUT_SECS * 1000 {
+            let _ = child.kill();
+            let _ = child.wait();
+            break;
+        }
+    }
+    let bytes = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let pkgs = parse_repo_cache(&text);
+
+    // Cache whatever we got (even partial) so repeat searches stay fast.
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, text);
+    pkgs
+}
 
 /// Read /var/lib/software-center/packages.list — the user's overlay package list.
 /// Returns package names, skipping blank lines and comments.

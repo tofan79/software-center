@@ -39,10 +39,13 @@ pub struct AppImage {
     pub desktop_path: String,
     pub icon_path: String,
     pub categories: Vec<String>,
-    /// "github" | "gitlab" | "url" | "none"
+    /// "github" | "gitlab" | "codeberg" | "forgejo" | "url" | "none"
     pub update_source: String,
     pub update_url: String,
     pub update_pattern: String,
+    /// Include pre-releases when checking for updates (GitHub/Gitea releases).
+    #[serde(default)]
+    pub allow_prerelease: bool,
     pub installed_at: String,
     pub last_checked: String,
     pub source: String,
@@ -590,6 +593,7 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         update_source: info.update_source.clone(),
         update_url: info.update_url.clone(),
         update_pattern: info.update_pattern.clone(),
+        allow_prerelease: false,
         installed_at: now,
         last_checked: String::new(),
         source: "appimage".to_string(),
@@ -630,8 +634,65 @@ pub fn uninstall(id: &str) -> (bool, String) {
     (true, format!("{} uninstalled.", app.name))
 }
 
+/// Global cleanup: remove AppImage files in the install dir that are not
+/// referenced by any sidecar (orphans, stale `.tmp`/`.part` downloads).
+/// Returns (removed_count, summary_message).
+pub fn cleanup_orphans() -> (usize, String) {
+    let install = install_dir();
+    let apps = get_installed();
+    let referenced: std::collections::HashSet<String> = apps
+        .iter()
+        .map(|a| a.installed_path.clone())
+        .collect();
+
+    let mut removed = 0usize;
+    let Ok(entries) = std::fs::read_dir(&install) else {
+        return (0, "AppImage install directory not found.".to_string());
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let fname = match path.file_name().and_then(|s| s.to_str()) {
+            Some(f) => f.to_string(),
+            None => continue,
+        };
+        let is_temp = fname.ends_with(".tmp") || fname.ends_with(".part");
+        let is_binary = fname.ends_with(".AppImage") || fname.ends_with(".appimage");
+        let is_json = fname.ends_with(".json");
+        if is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())) {
+            if std::fs::remove_file(&path).is_ok() {
+                removed += 1;
+            }
+        }
+        if is_json {
+            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            if let Ok(app) = serde_json::from_str::<AppImage>(&content) {
+                if !app.installed_path.is_empty() && !std::path::Path::new(&app.installed_path).exists() {
+                    let _ = std::fs::remove_file(&path);
+                    removed += 1;
+                }
+            }
+        }
+    }
+
+    let _ = Command::new("update-desktop-database").arg(desktop_dir()).output();
+    (
+        removed,
+        if removed > 0 {
+            format!("Removed {} orphaned AppImage file(s).", removed)
+        } else {
+            "No orphaned AppImage files found.".to_string()
+        },
+    )
+}
+
 /// Save update settings for an installed AppImage (update_source, update_url, update_pattern).
-pub fn save_settings(id: &str, update_source: &str, update_url: &str, update_pattern: &str) -> (bool, String) {
+pub fn save_settings(
+    id: &str,
+    update_source: &str,
+    update_url: &str,
+    update_pattern: &str,
+    allow_prerelease: bool,
+) -> (bool, String) {
     let sidecar_path = install_dir().join(format!("{}.json", id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
         return (false, format!("AppImage '{}' not found.", id));
@@ -639,9 +700,10 @@ pub fn save_settings(id: &str, update_source: &str, update_url: &str, update_pat
     let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
         return (false, "Failed to read sidecar.".to_string());
     };
-    app.update_source  = update_source.to_string();
-    app.update_url     = update_url.to_string();
-    app.update_pattern = update_pattern.to_string();
+    app.update_source    = update_source.to_string();
+    app.update_url       = update_url.to_string();
+    app.update_pattern   = update_pattern.to_string();
+    app.allow_prerelease = allow_prerelease;
     match serde_json::to_string_pretty(&app) {
         Ok(json) => match std::fs::write(&sidecar_path, json) {
             Ok(_)  => (true,  "Settings saved.".to_string()),
@@ -785,15 +847,24 @@ pub async fn check_update(app: &AppImage) -> Option<UpdateResult> {
 
 async fn check_single_update(app: &AppImage) -> Option<UpdateResult> {
     match app.update_source.as_str() {
-        "github" => check_github_update(app).await,
-        "gitlab" => check_gitlab_update(app).await,
-        "url"    => check_url_update(app).await,
-        _        => None,
+        "github"   => check_github_update(app).await,
+        "gitlab"   => check_gitlab_update(app).await,
+        "codeberg" => check_gitea_update(app).await,
+        "forgejo"  => check_gitea_update(app).await,
+        "url"      => check_url_update(app).await,
+        _          => None,
     }
 }
 
 async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
-    let api_url = normalize_github_url(&app.update_url);
+    // When prereleases are allowed, walk the release list (newest first)
+    // instead of `/releases/latest`, which skips prereleases entirely.
+    let base = normalize_github_url(&app.update_url);
+    let api_url = if app.allow_prerelease {
+        base.replace("releases/latest", "releases?per_page=10")
+    } else {
+        base
+    };
     let resp = reqwest::Client::new()
         .get(&api_url)
         .header("User-Agent", "Software-Center/1.0")
@@ -801,23 +872,63 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
         .send().await.ok()?
         .json::<serde_json::Value>().await.ok()?;
 
+    let pattern = glob_to_regex(&app.update_pattern);
+    let host = host_arch();
+
+    if app.allow_prerelease {
+        for rel in resp.as_array()?.iter() {
+            if rel["draft"].as_bool().unwrap_or(false) {
+                continue;
+            }
+            let new_version = rel["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+            if !version_newer(&new_version, &app.version) {
+                continue;
+            }
+            if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
+                return Some(make_result(app, new_version, &asset));
+            }
+        }
+        return None;
+    }
+
     let new_version = resp["tag_name"].as_str()?.trim_start_matches('v').to_string();
     if !version_newer(&new_version, &app.version) {
         return None;
     }
+    let asset = pick_asset(resp["assets"].as_array()?, &pattern, &host)?;
+    Some(make_result(app, new_version, &asset))
+}
+
+/// Gitea / Forgejo release API (Codeberg uses the same API).
+async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
+    let api_url = normalize_gitea_url(&app.update_url, app.allow_prerelease);
+    let resp = reqwest::Client::new()
+        .get(&api_url)
+        .header("User-Agent", "Software-Center/1.0")
+        .send().await.ok()?
+        .json::<serde_json::Value>().await.ok()?;
 
     let pattern = glob_to_regex(&app.update_pattern);
-    let asset = resp["assets"].as_array()?.iter()
-        .find(|a| a["name"].as_str().map(|n| pattern.is_match(n)).unwrap_or(false))?;
+    let host = host_arch();
 
-    Some(UpdateResult {
-        id: app.id.clone(),
-        name: app.name.clone(),
-        current_version: app.version.clone(),
-        new_version,
-        download_url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
-        icon_path: app.icon_path.clone(),
-    })
+    let releases: Vec<serde_json::Value> = if app.allow_prerelease {
+        resp.as_array().cloned().unwrap_or_default()
+    } else {
+        vec![resp]
+    };
+    for rel in &releases {
+        if rel["draft"].as_bool().unwrap_or(false) {
+            continue;
+        }
+        let new_version = rel["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+        if !version_newer(&new_version, &app.version) {
+            continue;
+        }
+        if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
+            return Some(make_result(app, new_version, &asset));
+        }
+    }
+    None
 }
 
 async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
@@ -828,19 +939,29 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
         .send().await.ok()?
         .json::<serde_json::Value>().await.ok()?;
 
-    let latest = releases.as_array()?.first()?;
+    let pattern = glob_to_regex(&app.update_pattern);
+    let host = host_arch();
+    let latest = releases.as_array()?.iter()
+        .find(|rel| !rel["upcoming_release"].as_bool().unwrap_or(false))?;
     let new_version = latest["tag_name"].as_str()?.trim_start_matches('v').to_string();
     if !version_newer(&new_version, &app.version) {
         return None;
     }
 
-    let pattern = glob_to_regex(&app.update_pattern);
     let links = latest["assets"]["links"].as_array()?;
-    let asset = links.iter().find(|a| {
-        let url = a["url"].as_str().unwrap_or("");
-        let fname = url.rsplit('/').next().unwrap_or("");
-        pattern.is_match(fname)
-    })?;
+    let asset = links.iter()
+        .filter(|a| {
+            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            pattern.is_match(fname)
+        })
+        .find(|a| {
+            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            name_matches_arch(fname, &host)
+        })
+        .or_else(|| links.iter().find(|a| {
+            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            pattern.is_match(fname)
+        }))?;
 
     Some(UpdateResult {
         id: app.id.clone(),
@@ -968,20 +1089,55 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str) -> impl Iterator
             return out;
         }
 
-        // Replace old AppImage
-        if !old_path.is_empty() {
-            let _ = std::fs::remove_file(&old_path);
-        }
-        let new_path = install_dir().join(format!("{}.AppImage", app_id));
-        if let Err(e) = std::fs::rename(&tmp_path, &new_path) {
+        // Verify the download is a real AppImage (ELF) for this machine.
+        let host = host_arch();
+        if let Err(e) = check_elf_and_arch(&tmp_path.to_string_lossy(), &host) {
+            let _ = std::fs::remove_file(&tmp_path);
             out.push(format!("Error: {}", e));
             out.push("__done__1".to_string());
             return out;
         }
-        if let Ok(meta) = std::fs::metadata(&new_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            let _ = std::fs::set_permissions(&new_path, perms);
+        out.push(format!("Verified {} AppImage for {}.", machine_name_of(&tmp_path.to_string_lossy()), host));
+
+        // Atomic replace with a backup so we can roll back on failure.
+        let new_path = install_dir().join(format!("{}.AppImage", app_id));
+        let backup_path = install_dir().join(format!("{}.AppImage.bak", app_id));
+        let _ = std::fs::remove_file(&backup_path);
+        if new_path.exists() {
+            if let Err(e) = std::fs::rename(&new_path, &backup_path) {
+                let _ = std::fs::remove_file(&tmp_path);
+                out.push(format!("Error: {}", e));
+                out.push("__done__1".to_string());
+                return out;
+            }
+        }
+        if let Err(e) = std::fs::rename(&tmp_path, &new_path) {
+            let _ = std::fs::remove_file(&new_path);
+            let _ = std::fs::rename(&backup_path, &new_path);
+            out.push(format!("Error: {}", e));
+            out.push("__done__1".to_string());
+            return out;
+        }
+        let exec_ok = {
+            if let Ok(meta) = std::fs::metadata(&new_path) {
+                let mut perms = meta.permissions();
+                perms.set_mode(perms.mode() | 0o111);
+                std::fs::set_permissions(&new_path, perms).is_ok()
+            } else {
+                false
+            }
+        };
+        if !exec_ok {
+            let _ = std::fs::remove_file(&new_path);
+            let _ = std::fs::rename(&backup_path, &new_path);
+            out.push("Error: Failed to make AppImage executable.".to_string());
+            out.push("__done__1".to_string());
+            return out;
+        }
+        // Swapped successfully — drop the backup and any stale old file.
+        let _ = std::fs::remove_file(&backup_path);
+        if old_path != new_path.to_string_lossy().as_ref() {
+            let _ = std::fs::remove_file(&old_path);
         }
 
         out.push("Extracting updated metadata...".to_string());
@@ -1048,6 +1204,134 @@ fn normalize_gitlab_url(url: &str) -> String {
     url.to_string()
 }
 
+/// Gitea / Forgejo release endpoint, e.g. `https://codeberg.org/owner/repo`
+/// or any self-hosted Forgejo instance.
+fn normalize_gitea_url(url: &str, allow_prerelease: bool) -> String {
+    if url.contains("/api/v1/") {
+        return url.to_string();
+    }
+    if let Some(caps) = Regex::new(r"https?://([^/]+)/([^/]+)/([^/]+)")
+        .ok()
+        .and_then(|re| re.captures(url))
+    {
+        let host  = &caps[1];
+        let owner = &caps[2];
+        let repo  = &caps[3];
+        let scheme = if url.starts_with("https://") { "https" } else { "http" };
+        let tail = if allow_prerelease {
+            "releases?limit=10"
+        } else {
+            "releases/latest"
+        };
+        return format!("{}://{}/api/v1/repos/{}/{}/{}", scheme, host, owner, repo, tail);
+    }
+    url.to_string()
+}
+
+/// Pick the best matching asset for this machine's architecture.
+/// Falls back to the first pattern match if no arch-friendly name is found.
+fn pick_asset<'a>(
+    assets: &'a [serde_json::Value],
+    pattern: &Regex,
+    host: &str,
+) -> Option<&'a serde_json::Value> {
+    let matching: Vec<&serde_json::Value> = assets.iter()
+        .filter(|a| a["name"].as_str().map(|n| pattern.is_match(n)).unwrap_or(false))
+        .collect();
+    matching.iter()
+        .find(|a| name_matches_arch(a["name"].as_str().unwrap_or(""), host))
+        .copied()
+        .or_else(|| matching.first().copied())
+}
+
+fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -> UpdateResult {
+    UpdateResult {
+        id: app.id.clone(),
+        name: app.name.clone(),
+        current_version: app.version.clone(),
+        new_version,
+        download_url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
+        icon_path: app.icon_path.clone(),
+    }
+}
+
+/// True when a release-asset filename does not clearly target another arch.
+fn name_matches_arch(name: &str, host: &str) -> bool {
+    let lower = name.to_lowercase();
+    let has_x86 = lower.contains("x86_64") || lower.contains("amd64")
+        || lower.contains("i686") || lower.contains("i386");
+    let has_arm = lower.contains("aarch64") || lower.contains("arm64")
+        || lower.contains("armhf") || lower.contains("armv7");
+    match host {
+        "x86_64" | "amd64"   => !(has_arm && !has_x86),
+        "aarch64" | "arm64"  => !(has_x86 && !has_arm),
+        _ => true,
+    }
+}
+
+fn host_arch() -> String {
+    Command::new("uname")
+        .arg("-m")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "x86_64".to_string())
+}
+
+fn elf_machine(path: &str) -> Result<u16> {
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = [0u8; 20];
+    let n = f.read(&mut buf)?;
+    if n < 20 {
+        anyhow::bail!("Downloaded file is too small to be an AppImage.");
+    }
+    if &buf[0..4] != b"\x7fELF" {
+        anyhow::bail!("Downloaded file is not an ELF executable (AppImage).");
+    }
+    Ok(u16::from_le_bytes([buf[18], buf[19]]))
+}
+
+fn machine_name_of(path: &str) -> &'static str {
+    match elf_machine(path) {
+        Ok(3)   => "i386",
+        Ok(62)  => "x86_64",
+        Ok(183) => "aarch64",
+        _       => "unknown-arch",
+    }
+}
+
+/// Verify a downloaded AppImage is a valid ELF for the host architecture.
+/// Primary check is the ELF e_machine header; the filename is a secondary hint.
+fn check_elf_and_arch(path: &str, host: &str) -> Result<()> {
+    let machine = elf_machine(path)?;
+    let machine_ok = match host {
+        "x86_64" | "amd64"  => machine == 62,
+        "aarch64" | "arm64" => machine == 183,
+        _ => true,
+    };
+    if !machine_ok {
+        anyhow::bail!(
+            "Architecture mismatch: host is {}, downloaded AppImage is {}.",
+            host,
+            machine_name_of(path)
+        );
+    }
+    let fname = std::path::Path::new(path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if !name_matches_arch(&fname, host) {
+        anyhow::bail!(
+            "Architecture mismatch: host is {}, but the downloaded file name targets another architecture ({}).",
+            host,
+            fname
+        );
+    }
+    Ok(())
+}
+
 fn version_newer(new: &str, current: &str) -> bool {
     if current.is_empty() { return true; }
     if new == current { return false; }
@@ -1090,4 +1374,82 @@ fn chrono_now() -> String {
         month += 1;
     }
     format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, days + 1, hour, min, sec)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_elf(machine: u16) -> std::path::PathBuf {
+        let mut buf = vec![0x7f, b'E', b'L', b'F'];
+        buf.resize(20, 0u8);
+        buf[18] = machine as u8;
+        buf[19] = (machine >> 8) as u8;
+        let p = std::env::temp_dir().join(format!("sc-test-{}-{}.bin", std::process::id(), machine));
+        std::fs::write(&p, &buf).unwrap();
+        p
+    }
+
+    #[test]
+    fn elf_machine_detects_x86_64() {
+        let p = write_elf(62);
+        assert_eq!(elf_machine(p.to_str().unwrap()).unwrap(), 62);
+        assert_eq!(machine_name_of(p.to_str().unwrap()), "x86_64");
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn check_elf_and_arch_rejects_non_elf() {
+        let p = std::env::temp_dir().join("sc-test-notelf.txt");
+        std::fs::write(&p, b"#!/bin/sh\necho hi").unwrap();
+        assert!(check_elf_and_arch(p.to_str().unwrap(), "x86_64").is_err());
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn check_elf_and_arch_rejects_arch_mismatch() {
+        let p = write_elf(183); // aarch64 binary
+        assert!(check_elf_and_arch(p.to_str().unwrap(), "x86_64").is_err());
+        assert!(check_elf_and_arch(p.to_str().unwrap(), "aarch64").is_ok());
+        std::fs::remove_file(&p).ok();
+    }
+
+    #[test]
+    fn check_elf_and_arch_rejects_filename_mismatch() {
+        // Machine header says x86_64 but the file name targets aarch64.
+        let p = std::env::temp_dir().join("sc-app-1.0-linux-aarch64.AppImage");
+        let buf = {
+            let mut b = vec![0x7f, b'E', b'L', b'F'];
+            b.resize(20, 0u8);
+            b[18] = 62; b[19] = 0;
+            b
+        };
+        std::fs::write(&p, &buf).unwrap();
+        // Filename hint disagrees with host → rejected (secondary check).
+        assert!(check_elf_and_arch(p.to_str().unwrap(), "x86_64").is_err());
+        // Machine header disagrees with host → rejected (primary check).
+        assert!(check_elf_and_arch(p.to_str().unwrap(), "aarch64").is_err());
+        std::fs::remove_file(&p).ok();
+
+        // Consistent file name + machine + host → accepted.
+        let q = std::env::temp_dir().join("sc-app-1.0-linux-aarch64.AppImage");
+        let buf = {
+            let mut b = vec![0x7f, b'E', b'L', b'F'];
+            b.resize(20, 0u8);
+            b[18] = 183; b[19] = 0;
+            b
+        };
+        std::fs::write(&q, &buf).unwrap();
+        assert!(check_elf_and_arch(q.to_str().unwrap(), "aarch64").is_ok());
+        std::fs::remove_file(&q).ok();
+    }
+
+    #[test]
+    fn name_matches_arch_heuristics() {
+        assert!(name_matches_arch("app-1.0-x86_64.AppImage", "x86_64"));
+        assert!(!name_matches_arch("app-1.0-aarch64.AppImage", "x86_64"));
+        assert!(name_matches_arch("app-1.0-aarch64.AppImage", "aarch64"));
+        assert!(!name_matches_arch("app-1.0-x86_64.AppImage", "aarch64"));
+        assert!(name_matches_arch("app-1.0.AppImage", "x86_64"));
+    }
 }

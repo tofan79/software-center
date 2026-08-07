@@ -14,6 +14,68 @@ Item {
     })
 
     property bool saved: false
+    property int maintUnusedCount: 0
+    property bool maintActive: false
+
+    function activate() {
+        loadSettings();
+        loadMaintUnused();
+        reposTab.loadRepos();
+    }
+
+    function loadMaintUnused() {
+        try { maintUnusedCount = JSON.parse(backend.listUnusedPackages()).length; }
+        catch(e) { maintUnusedCount = 0; }
+    }
+
+    function maintRun(which) {
+        maintActive = true;
+        maintStatus.text = "";
+        maintLog.text = "";
+        maintLog.visible = false;
+        switch (which) {
+            case "dnf_unused":
+                maintStatus.text = "Removing unused packages…";
+                backend.removeUnusedPackages();
+                break;
+            case "dnf_cache":
+                maintStatus.text = "Clearing dnf cache…";
+                backend.cleanDnfCache();
+                break;
+            case "flatpak":
+                maintStatus.text = "Cleaning unused Flatpak runtimes…";
+                backend.cleanFlatpakUnused();
+                break;
+            case "appimage":
+                maintStatus.text = "Cleaning orphaned AppImage files…";
+                backend.cleanAppImageCache();
+                break;
+        }
+        maintTimer.start();
+    }
+
+    Timer {
+        id: maintTimer
+        interval: 300
+        repeat: true
+        onTriggered: {
+            backend.pollOp();
+            if (!backend.opRunning) {
+                maintTimer.stop();
+                maintActive = false;
+                if (backend.opResult === 1) {
+                    maintStatus.text = "Done.";
+                    maintStatus.color = "#4caf50";
+                } else {
+                    maintStatus.text = "Operation failed:";
+                    maintStatus.color = "#e53935";
+                    maintLog.text = backend.readLog();
+                    maintLog.visible = maintLog.text !== "";
+                }
+                loadMaintUnused();
+            }
+        }
+    }
 
     function loadSettings() {
         try {
@@ -64,6 +126,8 @@ Item {
 
             TabButton { text: "🔄  Updates" }
             TabButton { text: "📦  Flatpak Repositories"; onClicked: flatpakTab.loadRemotes() }
+            TabButton { text: "🗂  Repositories";         onClicked: reposTab.activate() }
+            TabButton { text: "⚙️   System";             onClicked: systemTab.activate() }
         }
 
         Rectangle { Layout.fillWidth: true; height: 1; color: palette.mid; opacity: 0.3 }
@@ -157,6 +221,76 @@ Item {
                         wrapMode: Text.WordWrap
                         width: parent.width
                         topPadding: 4
+                    }
+
+                    Item { height: 16; width: 1 }
+                    Rectangle { width: parent.width; height: 1; color: palette.mid; opacity: 0.3 }
+                    Item { height: 16; width: 1 }
+
+                    Label {
+                        text: "Cache Maintenance"
+                        font.pixelSize: 14
+                        font.bold: true
+                        bottomPadding: 8
+                    }
+
+                    Label {
+                        text: "Clean leftover DNF metadata, unused dependency packages, unused Flatpak runtimes, and orphaned AppImage files."
+                        color: root.dimText
+                        font.pixelSize: 11
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                        bottomPadding: 12
+                    }
+
+                    GridLayout {
+                        columns: 2
+                        columnSpacing: 8
+                        rowSpacing: 8
+                        width: parent.width
+
+                        Button {
+                            text: "🗑  Remove " + settingsPage.maintUnusedCount + " unused packages (DNF)"
+                            enabled: settingsPage.maintUnusedCount > 0 && !settingsPage.maintActive
+                            onClicked: settingsPage.maintRun("dnf_unused")
+                        }
+                        Button {
+                            text: "🧹  Clear dnf cache"
+                            enabled: !settingsPage.maintActive
+                            onClicked: settingsPage.maintRun("dnf_cache")
+                        }
+                        Button {
+                            text: "🧽  Clean unused Flatpak runtimes"
+                            enabled: !settingsPage.maintActive
+                            onClicked: settingsPage.maintRun("flatpak")
+                        }
+                        Button {
+                            text: "📦  Clean orphaned AppImage files"
+                            enabled: !settingsPage.maintActive
+                            onClicked: settingsPage.maintRun("appimage")
+                        }
+                    }
+
+                    Label {
+                        id: maintStatus
+                        text: ""
+                        color: "#4caf50"
+                        font.pixelSize: 12
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                        topPadding: 4
+                        visible: text !== ""
+                    }
+
+                    Label {
+                        id: maintLog
+                        text: ""
+                        color: "#e53935"
+                        font.pixelSize: 10
+                        font.family: "monospace"
+                        wrapMode: Text.WrapAnywhere
+                        width: parent.width
+                        visible: text !== ""
                     }
 
                     Item { height: 24; width: 1 }
@@ -498,8 +632,21 @@ Item {
 
                 Component.onCompleted: loadRemotes()
             }
+
+            // ── DNF / COPR repositories tab ──────────────────────────────────
+            RepositoriesPage {
+                id: reposTab
+            }
+
+            // ── System tab ───────────────────────────────────────────────────
+            SystemPage {
+                id: systemTab
+            }
         }
     }
 
-    Component.onCompleted: loadSettings()
+    Component.onCompleted: {
+        loadSettings();
+        loadMaintUnused();
+    }
 }

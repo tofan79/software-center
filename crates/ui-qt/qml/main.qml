@@ -34,9 +34,6 @@ ApplicationWindow {
 
     SoftwareBackend { id: backend }
 
-    // True when running in a live ISO session — hides the System page
-    property bool isLive: backend.isLiveEnvironment()
-
     // ── Cache readiness ───────────────────────────────────────────────────────
     property bool cacheReady: false
 
@@ -57,7 +54,7 @@ ApplicationWindow {
         var kind = backend.fileKind(path);
         if (kind === "unknown") return;
         localFilePage.activate(path, kind);
-        backend.navigate(10);
+        backend.navigate(8);
     }
 
     // ── Startup init ──────────────────────────────────────────────────────────
@@ -143,13 +140,15 @@ ApplicationWindow {
     // Human-readable source label — native packages come from the system repos
     function sourceLabel(src) {
         if (src === "flatpak") return "Flatpak";
-        return "Fedora";
+        if (src === "appimage") return "AppImage";
+        return "DNF";
     }
 
     // Badge color for a source
     function sourceColor(src) {
         if (src === "flatpak") return "#1565c0";
-        return "#37474f";   // native
+        if (src === "appimage") return "#e65100";
+        return "#37474f";   // dnf / native
     }
 
     // Global detail page navigation
@@ -346,12 +345,10 @@ ApplicationWindow {
                                     { label: "🏠  Home",       page: 0 },
                                     { label: "📦  Installed",  page: 3 },
                                     { label: "🔄  Updates",    page: 4 },
-                                    { label: "⚙️   System",    page: 5 },
+                                    { label: "🖼  AppImages",  page: 5 },
                                     { label: "🛠  Settings",   page: 6 },
                                 ];
-                                return root.isLive
-                                    ? items.filter(function(i) { return i.page !== 5; })
-                                    : items;
+                                return items;
                             }
                             delegate: Rectangle {
                                 width: parent.width
@@ -578,7 +575,7 @@ ApplicationWindow {
                 SearchPage    { id: searchPageItem }
                 InstalledPage { id: installedPage }
                 UpdatesPage   { id: updatesPage }
-                SystemPage    { id: systemPageItem }
+                AppImagesPage { id: appImagesPage }
                 SettingsPage  { id: settingsPage }
 
                 // Page 7: Detail — loaded on demand; active=false destroys it entirely,
@@ -594,7 +591,7 @@ ApplicationWindow {
                     onLoaded: item.loadApp(root.detailApp)
                 }
 
-                // Page 10: Local file install
+                // Page 8: Local file install
                 LocalFilePage {
                     id: localFilePage
                     onBackRequested: backend.navigate(0)
@@ -609,7 +606,8 @@ ApplicationWindow {
                 switch (backend.currentPage) {
                     case 3: installedPage.activate(); break;
                     case 4: updatesPage.activate(); break;
-                    case 5: systemPageItem.activate(); break;
+                    case 5: appImagesPage.activate(); break;
+                    case 6: settingsPage.activate(); break;
                     case 7: if (detailLoader.item) detailLoader.item.loadApp(root.detailApp); break;
                 }
             }

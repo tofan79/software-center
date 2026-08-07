@@ -82,8 +82,11 @@ pub fn check_packages_script() -> Vec<serde_json::Value> {
         None => return Vec::new(),
     };
 
+    // `--refresh` forces a metadata sync so freshly published COPR/3rd-party
+    // updates (e.g. software-center itself) are seen immediately instead of
+    // waiting out the repo's metadata_expire TTL (default 48h).
     let out = Command::new("dnf5")
-        .args(["-q", "check-update"])
+        .args(["-q", "--refresh", "check-update"])
         .output();
     let Ok(out) = out else { return Vec::new() };
     // dnf5 check-update exit codes: 0 = no updates available, 100 = updates
@@ -435,7 +438,7 @@ fn drain_reader<R: std::io::Read>(reader: R, tx: std::sync::mpsc::Sender<String>
 
 /// Spawn `cmd` inside a PTY so the child process sees a real terminal (isatty → true).
 /// Falls back to paired pipes if PTY allocation fails.
-fn run_stream_owned(cmd: Vec<String>) -> impl Iterator<Item = String> {
+pub fn run_stream_owned(cmd: Vec<String>) -> impl Iterator<Item = String> {
     use std::os::unix::io::FromRawFd;
     use std::process::Stdio;
     use std::sync::mpsc;
@@ -540,4 +543,149 @@ fn run_stream_owned(cmd: Vec<String>) -> impl Iterator<Item = String> {
     });
 
     rx.into_iter()
+}
+
+// ── Repository management (dnf5) ──────────────────────────────────────────────
+
+/// Repo info as surfaced to the Repositories page.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DnfRepo {
+    pub id: String,
+    pub name: String,
+    pub enabled: bool,
+    pub kind: String, // "copr" | "system" | "fedora"
+    pub owner: String,
+    pub project: String,
+}
+
+/// List all dnf repositories (enabled + disabled) via `dnf5 repo list --all`.
+/// COPR repos get owner/project parsed from the `copr:<host>:<owner>:<project>`
+/// id so enable/disable/remove can route to the dnf5 copr plugin.
+pub fn list_dnf_repos() -> Vec<DnfRepo> {
+    let out = Command::new("dnf5")
+        .args(["-q", "repo", "list", "--all"])
+        .output()
+        .ok();
+    let Some(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    let mut repos = Vec::new();
+    for line in text.lines() {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        if cols.len() < 3 || cols[0] == "repo" {
+            continue;
+        }
+        let id = cols[0];
+        let status = cols[cols.len() - 1];
+        let name = cols[1..cols.len() - 1].join(" ");
+        if id.is_empty() || name.is_empty() {
+            continue;
+        }
+
+        let mut repo = DnfRepo {
+            id: id.to_string(),
+            name,
+            enabled: status == "enabled",
+            kind: if id.starts_with("copr:") { "copr".to_string() } else if id == "fedora" || id == "updates" || id.ends_with("-debuginfo") || id.ends_with("-source") { "fedora".to_string() } else { "system".to_string() },
+            owner: String::new(),
+            project: String::new(),
+        };
+
+        if repo.kind == "copr" {
+            // id = copr:<host>:<owner>:<project>
+            let mut parts = id.splitn(4, ':');
+            let _host = parts.next();
+            let _copr_prefix = parts.next();
+            repo.owner = parts.next().unwrap_or("").to_string();
+            repo.project = parts.next().unwrap_or("").to_string();
+        }
+        repos.push(repo);
+    }
+    repos
+}
+
+/// List packages installed as dependencies that are no longer needed
+/// (orphans) via `dnf5 -q repoquery --unneeded`. Read-only, no root.
+pub fn list_unused_packages() -> Vec<String> {
+    let out = Command::new("dnf5")
+        .args(["-q", "repoquery", "--unneeded"])
+        .output()
+        .ok();
+    let Some(out) = out else { return Vec::new() };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    text.lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .map(|l| {
+            // name-epoch:version-release.arch  →  name
+            l.rsplitn(2, ':').next().unwrap_or("").to_string()
+        })
+        .collect()
+}
+
+/// Stream `pkexec dnf5 copr enable <owner>/<project>` — adds/enables a COPR repo.
+pub fn enable_copr_stream(owner_project: &str) -> impl Iterator<Item = String> {
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "copr".into(),
+        "enable".into(),
+        owner_project.to_string(),
+        "-y".into(),
+    ])
+}
+
+/// Stream `pkexec dnf5 copr disable <owner>/<project>`.
+pub fn disable_copr_stream(owner_project: &str) -> impl Iterator<Item = String> {
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "copr".into(),
+        "disable".into(),
+        owner_project.to_string(),
+    ])
+}
+
+/// Stream `pkexec dnf5 copr remove <owner>/<project>` — deletes the repo file.
+pub fn remove_copr_stream(owner_project: &str) -> impl Iterator<Item = String> {
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "copr".into(),
+        "remove".into(),
+        owner_project.to_string(),
+    ])
+}
+
+/// Stream `pkexec dnf5 config-manager enable|disable <repo-id>` for non-COPR
+/// system repos (Terra, RPM Fusion, Brave, Fedora, etc).
+pub fn set_repo_enabled_stream(repo_id: &str, enabled: bool) -> impl Iterator<Item = String> {
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "config-manager".into(),
+        if enabled { "enable" } else { "disable" }.into(),
+        repo_id.to_string(),
+    ])
+}
+
+/// Stream `pkexec dnf5 clean all` — clears the dnf metadata/cache.
+pub fn clean_dnf_stream() -> impl Iterator<Item = String> {
+    run_stream_owned(vec!["pkexec".into(), "dnf5".into(), "clean".into(), "all".into()])
+}
+
+/// Stream `pkexec dnf5 autoremove -y` — removes unused/orphan packages.
+pub fn autoremove_stream() -> impl Iterator<Item = String> {
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "autoremove".into(),
+        "-y".into(),
+    ])
 }
