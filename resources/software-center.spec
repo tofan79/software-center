@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.0
+Version:        1.0.4
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -81,6 +81,14 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Fri Aug 07 2026 mindset <mindset@users.noreply.github.com> - 1.0.4-1
+- Search lintas repo (DNF/COPR/Terra/RPM Fusion/Brave) + badge Installed.
+- Hasil search dikelompokkan DNF/Flatpak/AppImage (gaya Shelly), sumber
+  yang diklik langsung dipakai untuk install.
+- Installed hanya menampilkan aplikasi GUI nyata (filter component_type).
+- AppImage: update atomik dengan backup+rollback, verifikasi ELF/arsitektur,
+  provider Codeberg/Forgejo, dan opsi allow-prerelease per aplikasi.
+
 * Wed Aug 05 2026 mindset <mindset@users.noreply.github.com> - 1.0.0-1
 - Initial Software Center package: Qt6/QML frontend + tray daemon.
 - Replaces the legacy rakuos-software package (webapps, KNS add-ons, and
