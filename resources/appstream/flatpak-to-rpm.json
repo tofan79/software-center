@@ -50,6 +50,6 @@
     "com.github.matoking.protontricks":   "protonptricks",
     "net.rpcs3.rpcs3":                    "rpcs3",
     "dev.lizardbyte.app.sunshine":        "Sunshine",
-    "com.spotify.client":                 "spotify-client",
+    "com.spotify.client":                 "spotify-launcher",
     "dev.zed.Zed":                        "zed"
 }

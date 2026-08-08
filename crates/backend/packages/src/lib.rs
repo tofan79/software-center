@@ -1009,6 +1009,7 @@ fn build_sources(
     // the app is installed in one of them.
     let installed_fp_system = get_installed_flatpaks_scoped("--system");
     let installed_fp_user = get_installed_flatpaks_scoped("--user");
+    let repo_names: HashSet<String> = get_repo_packages().into_iter().map(|p| p.name).collect();
     let desktops = get_installed_desktops();
 
     if primary.source == "flatpak" {
@@ -1042,12 +1043,10 @@ fn build_sources(
                     && !a.pkg_name_guessed
             }));
         if let Some(nat) = alt {
-            sources.push(source_option_from_app_info(
-                nat,
-                native_is_installed(&nat.package_name, &nat.id, &installed_rpm, &desktops),
-                "",
-                false,
-            ));
+            let nat_installed = native_is_installed(&nat.package_name, &nat.id, &installed_rpm, &desktops);
+                if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names) {
+                sources.push(source_option_from_app_info(nat, nat_installed, "", false));
+            }
         }
     } else {
         // Native/terra — look for flatpak alternate:
@@ -1104,6 +1103,7 @@ fn enrich_sources(
     installed_fp: &HashSet<String>,
 ) {
     let desktops = get_installed_desktops();
+    let repo_names: HashSet<String> = get_repo_packages().into_iter().map(|p| p.name).collect();
     for app in apps.iter_mut() {
         if !app.sources.is_empty() {
             continue; // already merged from merge_multi_source
@@ -1131,10 +1131,12 @@ fn enrich_sources(
             });
             if let Some(nat) = alt {
                 let nat_installed = native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
-                let fp_src = source_option_from_native_app(app);
-                let nat_src = source_option_from_app_info(nat, nat_installed, "", false);
-                app.sources = vec![nat_src, fp_src]; // native first
-                app.installed = app.sources.iter().any(|s| s.installed);
+            if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names) {
+                    let fp_src = source_option_from_native_app(app);
+                    let nat_src = source_option_from_app_info(nat, nat_installed, "", false);
+                    app.sources = vec![nat_src, fp_src]; // native first
+                    app.installed = app.sources.iter().any(|s| s.installed);
+                }
             }
         } else {
             // Native — look for flatpak alternate:
@@ -1447,6 +1449,18 @@ fn repo_cache_fresh(path: &std::path::Path) -> bool {
         }
     }
     true
+}
+
+/// A native RPM option is only worth offering if the package is installed
+/// or actually available in an enabled dnf repo. Some flatpak-to-rpm mappings
+/// (or name-matches) point at packages that don't ship anywhere — offering
+/// them would always fail at install time with "package not found".
+fn native_option_viable(
+    pkg: &str,
+    installed_rpm: &HashSet<String>,
+    repo_names: &HashSet<String>,
+) -> bool {
+    installed_rpm.contains(pkg) || repo_names.contains(pkg)
 }
 
 /// All packages available in enabled repositories, cached to disk.
