@@ -1417,7 +1417,7 @@ fn get_repo_packages() -> Vec<RepoPkg> {
     }
 
     let Ok(mut child) = Command::new("dnf5")
-        .args(["-y", "repoquery", "--qf", "%{name}\t%{summary}\t%{reponame}\n"])
+        .args(["-y", "--skip-file-locks", "repoquery", "--qf", "%{name}\t%{summary}\t%{reponame}\n"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()

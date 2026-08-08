@@ -85,8 +85,11 @@ pub fn check_packages_script() -> Vec<serde_json::Value> {
     // `--refresh` forces a metadata sync so freshly published COPR/3rd-party
     // updates (e.g. software-center itself) are seen immediately instead of
     // waiting out the repo's metadata_expire TTL (default 48h).
+    // `--skip-file-locks` avoids grabbing the system-repo lock so a concurrent
+    // CLI `dnf upgrade` is never blocked by this read-only check (and vice
+    // versa). Safe here: check-update never mutates the system repo.
     let out = Command::new("dnf5")
-        .args(["-q", "--refresh", "check-update"])
+        .args(["-q", "--skip-file-locks", "--refresh", "check-update"])
         .output();
     let Ok(out) = out else { return Vec::new() };
     // dnf5 check-update exit codes: 0 = no updates available, 100 = updates
@@ -166,7 +169,7 @@ pub fn schedule_reboot() -> (bool, String) {
 /// Build a name → EVR map of all installed packages from `dnf5 -q list --installed`.
 fn installed_evr_map() -> Option<HashMap<String, String>> {
     let out = Command::new("dnf5")
-        .args(["-q", "list", "--installed"])
+        .args(["-q", "--skip-file-locks", "list", "--installed"])
         .output()
         .ok()?;
     if !out.status.success() {
@@ -563,7 +566,7 @@ pub struct DnfRepo {
 /// id so enable/disable/remove can route to the dnf5 copr plugin.
 pub fn list_dnf_repos() -> Vec<DnfRepo> {
     let out = Command::new("dnf5")
-        .args(["-q", "repo", "list", "--all"])
+        .args(["-q", "--skip-file-locks", "repo", "list", "--all"])
         .output()
         .ok();
     let Some(out) = out else { return Vec::new() };
@@ -611,7 +614,7 @@ pub fn list_dnf_repos() -> Vec<DnfRepo> {
 /// (orphans) via `dnf5 -q repoquery --unneeded`. Read-only, no root.
 pub fn list_unused_packages() -> Vec<String> {
     let out = Command::new("dnf5")
-        .args(["-q", "repoquery", "--unneeded"])
+        .args(["-q", "--skip-file-locks", "repoquery", "--unneeded"])
         .output()
         .ok();
     let Some(out) = out else { return Vec::new() };

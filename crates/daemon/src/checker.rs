@@ -257,7 +257,13 @@ async fn get_remote_gnome_extension_info(
         url_escape(uuid),
         url_escape(shell_version)
     );
-    reqwest::get(&url)
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| e.to_string())?;
+    client
+        .get(&url)
+        .send()
         .await
         .map_err(|e| e.to_string())?
         .error_for_status()

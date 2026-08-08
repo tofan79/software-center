@@ -40,11 +40,18 @@ fn badge_count_path() -> std::path::PathBuf {
 }
 
 /// Returns true if the UI process is currently running (pid file + /proc check).
+/// Verifies the PID actually belongs to software-center (not a recycled PID) so
+/// a stale pid file never makes the tray think the UI is alive when it is not —
+/// which would silently swallow "Open Software Center" clicks.
 fn ui_is_running() -> bool {
     std::fs::read_to_string(pid_file())
         .ok()
         .and_then(|s| s.trim().parse::<u32>().ok())
-        .map(|pid| std::path::Path::new(&format!("/proc/{}", pid)).exists())
+        .map(|pid| {
+            std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
+                .unwrap_or_default()
+                .contains("software-center")
+        })
         .unwrap_or(false)
 }
 
@@ -188,42 +195,42 @@ async fn main() -> anyhow::Result<()> {
                 signal_or_spawn_ui();
             }
             DaemonMsg::CheckNow => {
-                // Always run the daemon's own check. Delegating to the UI via
-                // check_trigger is unreliable — the UI may not process it, and
-                // Qt's handler only covers the reboot case, not a full check.
+                // Run the check in its own task so the message loop stays
+                // responsive: otherwise a slow check (dnf5 metadata refresh,
+                // GNOME extension HTTP, AppImage fetches) would block the tray
+                // from handling OpenUi/Quit, making it appear frozen.
                 log::info!("Running update check.");
                 let settings = Settings::load();
-                let result = run_checks(&settings).await;
-                let count = result.total;
+                tokio::spawn(async move {
+                    let result = run_checks(&settings).await;
+                    let count = result.total;
 
-                let cache = serde_json::json!({
-                    "total":           count,
-                    "packages":        result.packages,
-                    "flatpak":         result.flatpak,
-                    "appimages":       result.appimages,
-                    "reboot_required": false,
+                    let cache = serde_json::json!({
+                        "total":           count,
+                        "packages":        result.packages,
+                        "flatpak":         result.flatpak,
+                        "appimages":       result.appimages,
+                        "reboot_required": false,
+                    });
+                    let cache_path = daemon_cache_path();
+                    if let Some(parent) = cache_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&cache_path,
+                        serde_json::to_string_pretty(&cache).unwrap_or_default());
+
+                    let _ = std::fs::write(badge_count_path(), count.to_string());
+
+                    // Signal the UI to refresh only once the cache is written,
+                    // so it never reloads stale data.
+                    let _ = std::fs::write(check_trigger_path(), "1");
+
+                    if let Some(body) = result.notification_body() {
+                        send_notification("Updates Available", &body).await;
+                    }
+
+                    log::info!("Check complete: {} update(s).", count);
                 });
-                let cache_path = daemon_cache_path();
-                if let Some(parent) = cache_path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                let _ = std::fs::write(&cache_path,
-                    serde_json::to_string_pretty(&cache).unwrap_or_default());
-
-                tray_handle.update(|t| t.status = if count > 0 {
-                    TrayStatus::Available(count)
-                } else {
-                    TrayStatus::UpToDate
-                });
-
-                // Signal any running UI to refresh its display from the new cache.
-                let _ = std::fs::write(check_trigger_path(), "1");
-
-                if let Some(body) = result.notification_body() {
-                    send_notification("Updates Available", &body).await;
-                }
-
-                log::info!("Check complete: {} update(s).", count);
             }
         }
     }
