@@ -154,6 +154,24 @@ Item {
                                     cursorShape: Qt.PointingHandCursor
                                     onClicked: root.showDetail(modelData)
                                 }
+
+                                // Installed badge
+                                Rectangle {
+                                    anchors { top: parent.top; right: parent.right; topMargin: 6; rightMargin: 6 }
+                                    height: 18
+                                    width: 18
+                                    radius: 9
+                                    color: "#4caf50"
+                                    visible: modelData.installed === true
+
+                                    Label {
+                                        anchors.centerIn: parent
+                                        text: "✓"
+                                        color: "white"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                    }
+                                }
                             }
                         }
                     }

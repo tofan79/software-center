@@ -234,12 +234,37 @@ pub struct SoftwareBackend {
             let rt = tokio::runtime::Runtime::new().unwrap();
             let result = rt.block_on(async {
                 let (picks, popular, updated, new) = scenter_home::load_all().await;
-                serde_json::json!({
+                let mut json = serde_json::json!({
                     "picks":   picks,
                     "popular": popular,
                     "updated": updated,
                     "new":     new,
-                })
+                });
+                // Enrich each card with a live installed flag so the Home page can
+                // show an "Installed" badge (fresh status, not the cached one).
+                let installed_rpm = scenter_packages::get_installed_packages().unwrap_or_default();
+                let installed_fp  = scenter_packages::get_installed_flatpaks();
+                let desktops      = scenter_packages::get_installed_desktops();
+                let mark_installed = |arr: &mut Vec<serde_json::Value>| {
+                    for it in arr.iter_mut() {
+                        let src  = it.get("source").and_then(|v| v.as_str()).unwrap_or("");
+                        let id   = it.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let bare = id.strip_suffix(".desktop").unwrap_or(id);
+                        let pkg  = it.get("package_name").and_then(|v| v.as_str()).unwrap_or("");
+                        let installed = if src == "flatpak" {
+                            installed_fp.contains(bare)
+                        } else {
+                            (!pkg.is_empty() && installed_rpm.contains(pkg))
+                                || desktops.contains(bare)
+                        };
+                        it["installed"] = serde_json::Value::Bool(installed);
+                    }
+                };
+                if let Some(arr) = json["picks"].as_array_mut()   { mark_installed(arr); }
+                if let Some(arr) = json["popular"].as_array_mut() { mark_installed(arr); }
+                if let Some(arr) = json["updated"].as_array_mut() { mark_installed(arr); }
+                if let Some(arr) = json["new"].as_array_mut()     { mark_installed(arr); }
+                json
             });
             let _ = std::fs::write(
                 log_path(),
@@ -489,15 +514,6 @@ pub struct SoftwareBackend {
             if let Ok(apps) = scenter_packages::search(&query) {
                 for a in apps { results.push(serde_json::to_value(a).unwrap_or_default()); }
             }
-            // Search AppImages
-            let q_lower = query.to_lowercase();
-            for a in scenter_appimages::get_installed() {
-                let name = a.name.to_lowercase();
-                let summary = a.description.to_lowercase();
-                if name.contains(&q_lower) || summary.contains(&q_lower) {
-                    results.push(serde_json::to_value(a).unwrap_or_default());
-                }
-            }
 
             let _ = std::fs::write(
                 log_path(),
@@ -515,6 +531,24 @@ pub struct SoftwareBackend {
         std::thread::spawn(move || {
             let mut results: Vec<serde_json::Value> = Vec::new();
             if let Ok(apps) = scenter_packages::get_by_category(&category) {
+                for a in apps { results.push(serde_json::to_value(a).unwrap_or_default()); }
+            }
+            let _ = std::fs::write(
+                log_path(),
+                serde_json::to_string(&results).unwrap_or_default(),
+            );
+            shared.result.store(1, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+        });
+    }),
+
+    loadSource: qt_method!(fn loadSource(&mut self, source: QString) {
+        let source = source.to_string();
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let mut results: Vec<serde_json::Value> = Vec::new();
+            if let Ok(apps) = scenter_packages::get_by_source(&source) {
                 for a in apps { results.push(serde_json::to_value(a).unwrap_or_default()); }
             }
             let _ = std::fs::write(
@@ -792,9 +826,9 @@ pub struct SoftwareBackend {
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
-            let (count, msg) = scenter_appimages::cleanup_orphans();
+            let (_count, msg) = scenter_appimages::cleanup_orphans();
             let _ = std::fs::write(log_path(), format!("{}\n", msg));
-            shared.result.store(if count >= 0 { 1 } else { 2 }, Ordering::Relaxed);
+            shared.result.store(1, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
     }),

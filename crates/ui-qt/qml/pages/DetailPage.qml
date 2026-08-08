@@ -14,6 +14,28 @@ Item {
     // making the user pick Fedora/Flathub again.
     property string preferredSource: ""
 
+    // Where the detail page was opened from: "dnf", "flatpak" or "category".
+    // - dnf: only the native (RPM) source is offered — install goes to dnf directly.
+    // - flatpak: only flatpak sources are offered (System vs User scope).
+    // - category / other: full source picker.
+    property string context: "category"
+
+    // Trim the source list to the set the current browsing context cares about.
+    function _filterSourcesByContext(data) {
+        if (!data || !Array.isArray(data.sources)) return data;
+        var list = data.sources;
+        if (detailPage.context === "dnf") {
+            list = list.filter(function(s) { return s.source !== "flatpak"; });
+        } else if (detailPage.context === "flatpak") {
+            list = list.filter(function(s) { return s.source === "flatpak"; });
+        }
+        if (list.length === 0) list = data.sources;
+        var copy = {};
+        for (var k in data) copy[k] = data[k];
+        copy.sources = list;
+        return copy;
+    }
+
     function _selectBestSource(appData) {
         var bestIdx = 0;
         if (Array.isArray(appData.sources) && appData.sources.length > 1) {
@@ -41,10 +63,10 @@ Item {
     }
 
     function loadApp(appData) {
-        app = appData;
+        app = _filterSourcesByContext(appData);
         screenshotIndex = 0;
         preferredSource = appData.source || "";
-        sourceSelector.currentIndex = _selectBestSource(appData);
+        sourceSelector.currentIndex = _selectBestSource(app);
         _reloadScreenshots();
         _loadAddons();
 
@@ -178,8 +200,8 @@ Item {
                 try {
                     var fullApp = JSON.parse(json);
                     if (fullApp && fullApp.id) {
-                        detailPage.app = fullApp;
-                        detailPage.sourceSelector.currentIndex = detailPage._selectBestSource(fullApp);
+                        detailPage.app = detailPage._filterSourcesByContext(fullApp);
+                        detailPage.sourceSelector.currentIndex = detailPage._selectBestSource(detailPage.app);
                         detailPage._reloadScreenshots();
                         detailPage._loadAddons();
                     }

@@ -20,26 +20,35 @@ Item {
         pollTimer.start();
     }
 
-    // ── Shelly-style source grouping: DNF / Flatpak / AppImage ────────────────
+    // ── Shelly-style source grouping: DNF / Flatpak ──────────────────────────
     function _isFlatpak(a) { return a.source === "flatpak"; }
-    function _isAppImage(a) { return a.source === "appimage"; }
-    function _isDnf(a) { return a.source !== "flatpak" && a.source !== "appimage"; }
+    function _isDnf(a) { return a.source !== "flatpak"; }
 
     property var dnfResults: []
     property var flatpakResults: []
-    property var appImageResults: []
+
+    // Active source tab: 0 = DNF, 1 = Flatpak
+    property int activeSource: 0
+    property var activeResults: {
+        if (activeSource === 0) return dnfResults;
+        return flatpakResults;
+    }
+
+    function _activeSourceLabel() {
+        if (activeSource === 0) return "DNF";
+        return "Flatpak";
+    }
 
     function _group() {
-        var dnf = [], fp = [], ai = [];
+        activeSource = 0;
+        var dnf = [], fp = [];
         for (var i = 0; i < searchResults.length; i++) {
             var a = searchResults[i];
-            if (_isAppImage(a)) ai.push(a);
-            else if (_isFlatpak(a)) fp.push(a);
+            if (_isFlatpak(a)) fp.push(a);
             else dnf.push(a);
         }
         dnfResults = dnf;
         flatpakResults = fp;
-        appImageResults = ai;
     }
 
     Timer {
@@ -257,164 +266,74 @@ Item {
                 }
             }
 
+            // ── Shelly-style source tabs: DNF | Flatpak ─────────────────────
+            RowLayout {
+                id: tabRow
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                spacing: 0
+                visible: searchResults.length > 0
+
+                TabBar {
+                    id: sourceTabs
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 38
+
+                    TabButton {
+                        text: "DNF (" + dnfResults.length + ")"
+                        font.pixelSize: 12
+                        onClicked: searchPage.activeSource = 0
+                    }
+                    TabButton {
+                        text: "Flatpak (" + flatpakResults.length + ")"
+                        font.pixelSize: 12
+                        onClicked: searchPage.activeSource = 1
+                    }
+                }
+            }
+
+            Rectangle {
+                anchors { left: parent.left; right: parent.right; top: tabRow.bottom }
+                height: 1
+                color: palette.mid
+                opacity: 0.3
+                visible: searchResults.length > 0
+            }
+
             ScrollView {
-                anchors.fill: parent
+                anchors { left: parent.left; right: parent.right; top: tabRow.bottom; bottom: parent.bottom }
                 contentWidth: availableWidth
                 visible: searchResults.length > 0
                 clip: true
 
                 Column {
                     width: parent.width
-                    topPadding: 4
+                    topPadding: 8
                     bottomPadding: 8
 
-                    // Result count header
+                    // Result count header for the active tab
                     Label {
                         leftPadding: 16
-                        topPadding: 8
                         bottomPadding: 4
-                        text: searchResults.length + " result" + (searchResults.length !== 1 ? "s" : "") +
+                        text: activeResults.length + " result" + (activeResults.length !== 1 ? "s" : "") +
                               " for \"" + lastQuery + "\""
                         font.pixelSize: 12
                         color: root.dimText
                     }
 
-                    // ── DNF section ──────────────────────────────────────────
-                    Rectangle {
-                        width: parent.width
-                        height: 32
-                        color: palette.base
-
-                        Row {
-                            anchors.verticalCenter: parent.verticalCenter
-                            leftPadding: 16
-                            spacing: 8
-
-                            Rectangle {
-                                width: 10; height: 10
-                                radius: 5
-                                color: root.sourceColor("native")
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: "DNF packages"
-                                font.bold: true
-                                font.pixelSize: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: dnfResults.length
-                                font.pixelSize: 11
-                                color: root.dimText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        Rectangle {
-                            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 16; rightMargin: 16 }
-                            height: 1
-                            color: palette.mid
-                            opacity: 0.3
-                        }
-                    }
-
                     Repeater {
-                        model: dnfResults
+                        model: activeResults
                         delegate: resultRowComp
                     }
 
-                    // ── Flatpak section ──────────────────────────────────────
-                    Rectangle {
+                    // Empty state for the active tab
+                    Label {
                         width: parent.width
-                        height: 32
-                        color: palette.base
-
-                        Row {
-                            anchors.verticalCenter: parent.verticalCenter
-                            leftPadding: 16
-                            spacing: 8
-
-                            Rectangle {
-                                width: 10; height: 10
-                                radius: 5
-                                color: root.sourceColor("flatpak")
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: "Flatpak apps"
-                                font.bold: true
-                                font.pixelSize: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: flatpakResults.length
-                                font.pixelSize: 11
-                                color: root.dimText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        Rectangle {
-                            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 16; rightMargin: 16 }
-                            height: 1
-                            color: palette.mid
-                            opacity: 0.3
-                        }
-                    }
-
-                    Repeater {
-                        model: flatpakResults
-                        delegate: resultRowComp
-                    }
-
-                    // ── AppImage section ─────────────────────────────────────
-                    Rectangle {
-                        width: parent.width
-                        height: 32
-                        color: palette.base
-
-                        Row {
-                            anchors.verticalCenter: parent.verticalCenter
-                            leftPadding: 16
-                            spacing: 8
-
-                            Rectangle {
-                                width: 10; height: 10
-                                radius: 5
-                                color: root.sourceColor("appimage")
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: "AppImages"
-                                font.bold: true
-                                font.pixelSize: 12
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-
-                            Label {
-                                text: appImageResults.length
-                                font.pixelSize: 11
-                                color: root.dimText
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        Rectangle {
-                            anchors { left: parent.left; right: parent.right; bottom: parent.bottom; leftMargin: 16; rightMargin: 16 }
-                            height: 1
-                            color: palette.mid
-                            opacity: 0.3
-                        }
-                    }
-
-                    Repeater {
-                        model: appImageResults
-                        delegate: resultRowComp
+                        leftPadding: 16
+                        topPadding: 24
+                        text: "No " + searchPage._activeSourceLabel() + " results for \"" + lastQuery + "\""
+                        color: root.dimText
+                        font.pixelSize: 13
+                        visible: activeResults.length === 0
                     }
                 }
             }

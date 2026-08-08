@@ -155,7 +155,19 @@ ApplicationWindow {
     property var detailApp: null
     property int previousPage: 0
 
+    // Where the detail page was opened from — drives the install-source picker:
+    // DNF page → native only, Flatpak page → flatpak System/User, categories → full picker.
+    property string detailContext: "category"
+
+    function _detailContextForPage(pg) {
+        if (pg === 9) return "dnf";
+        if (pg === 10) return "flatpak";
+        if (pg === 2) return searchPageItem.activeSource === 1 ? "flatpak" : "dnf";
+        return "category";
+    }
+
     function showDetail(appData) {
+        detailContext = _detailContextForPage(backend.currentPage);
         detailApp = appData;
         previousPage = backend.currentPage;
         if (!detailLoader.active) {
@@ -345,6 +357,8 @@ ApplicationWindow {
                                     { label: "🏠  Home",       page: 0 },
                                     { label: "📦  Installed",  page: 3 },
                                     { label: "🔄  Updates",    page: 4 },
+                                    { label: "🔵  DNF",        page: 9 },
+                                    { label: "🧩  Flatpak",    page: 10 },
                                     { label: "🖼  AppImages",  page: 5 },
                                     { label: "🛠  Settings",   page: 6 },
                                 ];
@@ -585,6 +599,7 @@ ApplicationWindow {
                     active: false
                     sourceComponent: Component {
                         DetailPage {
+                            context: root.detailContext
                             onBackRequested: root.hideDetail()
                         }
                     }
@@ -595,6 +610,20 @@ ApplicationWindow {
                 LocalFilePage {
                     id: localFilePage
                     onBackRequested: backend.navigate(0)
+                }
+
+                // Page 9: DNF-only browser
+                SourceAppsPage {
+                    id: dnfPage
+                    source: "dnf"
+                    titleText: "DNF Apps"
+                }
+
+                // Page 10: Flatpak-only browser
+                SourceAppsPage {
+                    id: flatpakPage
+                    source: "flatpak"
+                    titleText: "Flatpak Apps"
                 }
             }
         }
@@ -609,6 +638,8 @@ ApplicationWindow {
                     case 5: appImagesPage.activate(); break;
                     case 6: settingsPage.activate(); break;
                     case 7: if (detailLoader.item) detailLoader.item.loadApp(root.detailApp); break;
+                    case 9: dnfPage.activate(); break;
+                    case 10: flatpakPage.activate(); break;
                 }
             }
         }

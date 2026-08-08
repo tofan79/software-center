@@ -4,27 +4,21 @@ import QtQuick.Layouts 1.15
 import "../components"
 
 Item {
-    id: explorePage
+    id: sourcePage
 
-    // ── State ──────────────────────────────────────────────────────────────────
-    property string selectedCategory: ""
-    property string selectedLabel: ""
-    property var    subcatList: []       // subs when top-level cat was clicked
-    property string parentCat: ""
-    property string parentLabel: ""
-    property var    categoryApps: []
+    property string source: "dnf"
+    property string titleText: "DNF Apps"
+    property var    apps: []
     property bool   loading: false
     property int    visibleCount: 0
 
-    // View & sort preferences (0=grid/1=list; 0=Name A-Z, 1=Name Z-A,
-    // 2=Recently Updated, 3=Installed first)
     property int viewMode: 0
     property int sortMode: 0
 
     readonly property int pageSize: 60
 
     function _sortedApps() {
-        var arr = categoryApps.slice();
+        var arr = apps.slice();
         if (sortMode === 1) {
             arr.sort(function(a,b){ return (b.name || "").localeCompare(a.name || ""); });
         } else if (sortMode === 2) {
@@ -47,66 +41,19 @@ Item {
         return sorted.slice(0, Math.min(visibleCount, sorted.length));
     }
 
-    // ── Public API ─────────────────────────────────────────────────────────────
-
-    function loadCategoryWithSubs(cat, label, subcats) {
-        _reset(cat, label);
-        subcatList = subcats || [];
-        parentCat = "";
-        parentLabel = "";
-        _fetchApps(cat);
-    }
-
-    function showCategory(cat, label) {
-        _reset(cat, label);
-        subcatList = [];
-        _fetchApps(cat);
-    }
-
-    function goBack() {
-        if (parentCat !== "") {
-            var tree = root.categoryTree;
-            var subs = [];
-            for (var i = 0; i < tree.length; i++) {
-                if (tree[i].cat === parentCat) { subs = tree[i].subs; break; }
-            }
-            loadCategoryWithSubs(parentCat, parentLabel, subs);
-        }
-    }
-
-    // ── Internal ───────────────────────────────────────────────────────────────
-
-    function _reset(cat, label) {
+    function activate() {
         pollTimer.stop();
-        selectedCategory = cat;
-        selectedLabel = label;
-        categoryApps = [];
-        loading = false;
+        apps = [];
         visibleCount = 0;
-    }
-
-    function _fetchApps(cat) {
         loading = true;
-        categoryApps = [];
-        backend.loadCategory(cat);
+        backend.loadSource(source);
         pollTimer.start();
     }
 
     function revealMore() {
-        if (loading || categoryApps.length === 0)
-            return;
-        if (visibleCount < categoryApps.length)
-            visibleCount = Math.min(categoryApps.length, visibleCount + pageSize);
-    }
-
-    function maybeRevealFromScroll() {
-        var item = appScroll.contentItem;
-        if (!item) return;
-        var bottom = item.contentY + appScroll.height;
-        if (loading || categoryApps.length === 0) return;
-        if (visibleCount >= categoryApps.length) return;
-        if (bottom >= item.contentHeight - 320)
-            revealMore();
+        if (loading || apps.length === 0) return;
+        if (visibleCount < apps.length)
+            visibleCount = Math.min(apps.length, visibleCount + pageSize);
     }
 
     Timer {
@@ -120,11 +67,11 @@ Item {
                 loading = false;
                 if (backend.opResult === 1) {
                     try {
-                        categoryApps = JSON.parse(backend.readLog());
-                        visibleCount = Math.min(pageSize, categoryApps.length);
+                        apps = JSON.parse(backend.readLog());
+                        visibleCount = Math.min(pageSize, apps.length);
                     }
                     catch(e) {
-                        categoryApps = [];
+                        apps = [];
                     }
                 }
             }
@@ -137,43 +84,13 @@ Item {
         anchors.fill: parent
         spacing: 0
 
-        // ── Back bar (shown when in a subcategory) ─────────────────────────────
-        Rectangle {
-            Layout.fillWidth: true
-            height: 44
-            color: palette.button
-            visible: parentCat !== ""
-
-            RowLayout {
-                anchors { fill: parent; leftMargin: 12; rightMargin: 12 }
-                spacing: 8
-
-                Button {
-                    text: "← " + (parentLabel !== "" ? parentLabel : "Back")
-                    flat: true
-                    font.pixelSize: 12
-                    onClicked: explorePage.goBack()
-                }
-
-                Label {
-                    text: selectedLabel
-                    font.pixelSize: 15
-                    font.bold: true
-                }
-
-                Item { Layout.fillWidth: true }
-            }
-        }
-
-        // ── Category heading (top-level, no back bar) ──────────────────────────
         Item {
             Layout.fillWidth: true
             height: 44
-            visible: selectedLabel !== "" && parentCat === ""
 
             Label {
                 anchors { left: parent.left; leftMargin: 24; verticalCenter: parent.verticalCenter }
-                text: selectedLabel
+                text: sourcePage.titleText
                 font.pixelSize: 18
                 font.bold: true
             }
@@ -184,7 +101,7 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 40
             color: palette.button
-            visible: !loading && categoryApps.length > 0
+            visible: !loading && apps.length > 0
 
             RowLayout {
                 anchors { fill: parent; leftMargin: 16; rightMargin: 16 }
@@ -195,18 +112,18 @@ Item {
                 Button {
                     text: "Grid"
                     font.pixelSize: 12
-                    highlighted: explorePage.viewMode === 0
-                    flat: !(explorePage.viewMode === 0)
+                    highlighted: sourcePage.viewMode === 0
+                    flat: !(sourcePage.viewMode === 0)
                     implicitHeight: 26
-                    onClicked: explorePage.viewMode = 0
+                    onClicked: sourcePage.viewMode = 0
                 }
                 Button {
                     text: "List"
                     font.pixelSize: 12
-                    highlighted: explorePage.viewMode === 1
-                    flat: !(explorePage.viewMode === 1)
+                    highlighted: sourcePage.viewMode === 1
+                    flat: !(sourcePage.viewMode === 1)
                     implicitHeight: 26
-                    onClicked: explorePage.viewMode = 1
+                    onClicked: sourcePage.viewMode = 1
                 }
 
                 Item { Layout.fillWidth: true }
@@ -214,28 +131,20 @@ Item {
                 Label { text: "Sort:"; font.pixelSize: 12; color: root.dimText }
 
                 ComboBox {
-                    id: sortCombo
                     font.pixelSize: 12
                     implicitHeight: 26
                     implicitWidth: 150
                     model: ["Name (A–Z)", "Name (Z–A)", "Recently Updated", "Installed First"]
-                    onActivated: explorePage.sortMode = currentIndex
+                    onActivated: sourcePage.sortMode = currentIndex
                 }
             }
         }
 
-        // ── Scrollable content ─────────────────────────────────────────────────
         ScrollView {
-            id: appScroll
             Layout.fillWidth: true
             Layout.fillHeight: true
             contentWidth: availableWidth
             clip: true
-
-            Connections {
-                target: appScroll.contentItem
-                function onContentYChanged() { explorePage.maybeRevealFromScroll(); }
-            }
 
             Column {
                 width: parent.width
@@ -243,10 +152,6 @@ Item {
                 bottomPadding: 24
                 spacing: 0
 
-                // Subcategories live in the sidebar; the page itself always
-                // shows the app grid for the selected category.
-
-                // ── Loading indicator ──────────────────────────────────────────
                 Item {
                     width: parent.width
                     height: 60
@@ -263,41 +168,30 @@ Item {
                     }
                 }
 
-                // ── Empty state ────────────────────────────────────────────────
                 Label {
                     anchors.horizontalCenter: parent.horizontalCenter
                     topPadding: 40
-                    text: "No apps found in this category."
+                    text: "No apps found for this source."
                     color: root.dimText
                     font.pixelSize: 14
-                    visible: !loading && categoryApps.length === 0 && selectedCategory !== ""
+                    visible: !loading && apps.length === 0
                 }
 
-                Label {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    topPadding: 60
-                    text: "Select a category from the sidebar to browse apps."
-                    color: root.dimText
-                    font.pixelSize: 14
-                    visible: !loading && selectedCategory === ""
-                }
-
-                // ── App grid (Flow — wraps to fill width) ──────────────────────
                 Flow {
                     width: parent.width - 32
                     anchors.horizontalCenter: parent.horizontalCenter
                     spacing: 12
-                    visible: !loading && displayedApps.length > 0 && explorePage.viewMode === 0
+                    visible: !loading && displayedApps.length > 0 && sourcePage.viewMode === 0
                     topPadding: 4
 
                     Repeater {
-                        model: loading ? [] : explorePage.displayedApps
+                        model: loading ? [] : sourcePage.displayedApps
 
                         Rectangle {
                             width: 120
                             height: 120
                             radius: 10
-                            color: appCardArea.containsMouse ? Qt.lighter(root.cardColor, 1.08) : root.cardColor
+                            color: cardArea.containsMouse ? Qt.lighter(root.cardColor, 1.08) : root.cardColor
                             border.color: palette.mid
                             border.width: 1
 
@@ -322,7 +216,6 @@ Item {
                                 }
                             }
 
-                            // Installed checkmark badge
                             Rectangle {
                                 visible: modelData.installed === true
                                 width: 16; height: 16
@@ -338,7 +231,7 @@ Item {
                             }
 
                             MouseArea {
-                                id: appCardArea
+                                id: cardArea
                                 anchors.fill: parent
                                 hoverEnabled: true
                                 cursorShape: Qt.PointingHandCursor
@@ -351,11 +244,11 @@ Item {
                 // ── App list (rows with detail) ────────────────────────────────
                 Column {
                     width: parent.width
-                    visible: !loading && displayedApps.length > 0 && explorePage.viewMode === 1
+                    visible: !loading && displayedApps.length > 0 && sourcePage.viewMode === 1
                     topPadding: 4
 
                     Repeater {
-                        model: loading ? [] : explorePage.displayedApps
+                        model: loading ? [] : sourcePage.displayedApps
 
                         Rectangle {
                             width: parent.width
@@ -458,8 +351,8 @@ Item {
 
                 Item {
                     width: parent.width
-                    height: categoryApps.length > displayedApps.length ? 64 : 0
-                    visible: categoryApps.length > displayedApps.length
+                    height: apps.length > displayedApps.length ? 64 : 0
+                    visible: apps.length > displayedApps.length
 
                     Row {
                         anchors.centerIn: parent
@@ -467,11 +360,11 @@ Item {
 
                         Button {
                             text: "Load More"
-                            onClicked: explorePage.revealMore()
+                            onClicked: sourcePage.revealMore()
                         }
 
                         Label {
-                            text: displayedApps.length + " of " + categoryApps.length + " apps"
+                            text: displayedApps.length + " of " + apps.length + " apps"
                             color: root.dimText
                             font.pixelSize: 11
                             anchors.verticalCenter: parent.verticalCenter

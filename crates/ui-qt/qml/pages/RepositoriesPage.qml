@@ -327,9 +327,10 @@ Item {
             // Enable/disable toggle
             Button {
                 text: repo.enabled ? "Disable" : "Enable"
-                font.pixelSize: 11
+                font.pixelSize: 12
                 flat: true
                 implicitWidth: 72
+                implicitHeight: 30
                 enabled: !opActive
                 onClicked: reposPage.toggleRepo(repo.id, !repo.enabled)
             }
@@ -338,14 +339,15 @@ Item {
             Button {
                 visible: repo.kind === "copr"
                 text: "Remove"
-                font.pixelSize: 11
+                font.pixelSize: 12
                 flat: true
                 implicitWidth: 72
+                implicitHeight: 30
                 enabled: !opActive
                 contentItem: Label {
                     text: "Remove"
                     color: "#e53935"
-                    font.pixelSize: 11
+                    font.pixelSize: 12
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }

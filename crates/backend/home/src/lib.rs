@@ -69,6 +69,10 @@ pub struct HomeApp {
     pub icon_url: String,
     pub icon_path: String,
     pub source: String,
+    #[serde(default)]
+    pub package_name: String,
+    #[serde(default)]
+    pub installed: bool,
 }
 
 impl From<&AppInfo> for HomeApp {
@@ -81,6 +85,8 @@ impl From<&AppInfo> for HomeApp {
             icon_url: a.icon_url.clone(),
             icon_path: a.icon_path.clone(),
             source: a.source.clone(),
+            package_name: a.package_name.clone(),
+            installed: false,
         }
     }
 }

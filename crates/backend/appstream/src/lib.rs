@@ -12,6 +12,29 @@ use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, RwLock};
 
+/// Convert a Unix epoch timestamp (seconds) to "YYYY-MM-DD" (UTC).
+/// Used for `<release timestamp="...">` entries that lack a `date` attribute.
+fn epoch_to_date(ts: i64) -> Option<String> {
+    let days = ts.div_euclid(86_400);
+    civil_from_days(days).map(|(y, m, d)| format!("{y:04}-{m:02}-{d:02}"))
+}
+
+/// Convert days since 1970-01-01 to a (year, month, day) civil date (UTC).
+/// Howard Hinnant's civil-from-days algorithm.
+fn civil_from_days(z: i64) -> Option<(i64, i64, i64)> {
+    let z = z + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    Some((y, m, d))
+}
+
 // ── Global in-memory cache ────────────────────────────────────────────────────
 // Parsed once on first call, shared across all callers via Arc (no re-parsing).
 // Wrapped in a RwLock so reload_appstream() can swap in fresh data (e.g. after
@@ -93,6 +116,8 @@ pub struct AppInfo {
     pub remotes: Vec<String>,     // all flatpak remote names this app id was found in (e.g. ["flathub", "cosmic"]); empty for non-flatpak sources
     #[serde(default)]
     pub component_type: String,   // appstream component type: "desktop", "desktop-application", "font", "codec", ...
+    #[serde(default)]
+    pub updated: String,          // latest <release date="YYYY-MM-DD"> (empty if none)
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -525,6 +550,7 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
     let mut in_screenshot_image = false;
     let mut current_url_type: Option<String> = None;
     let mut in_extends = false;
+    let mut in_releases = false;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -628,6 +654,31 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                             .map(|a| String::from_utf8_lossy(&a.value).to_lowercase());
                     }
                     b"extends" if current.is_some() => in_extends = true,
+                    b"releases" if current.is_some() => in_releases = true,
+                    b"release" if current.is_some() && in_releases => {
+                        // <release date="YYYY-MM-DD" .../> or <release timestamp="<epoch>"/>
+                        // — keep the newest date only (releases may be unordered).
+                        let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
+                        let mut new_date = attrs.iter()
+                            .find(|a| a.key.as_ref() == b"date")
+                            .map(|a| String::from_utf8_lossy(&a.value).to_string());
+                        if new_date.is_none() {
+                            if let Some(ts) = attrs.iter()
+                                .find(|a| a.key.as_ref() == b"timestamp")
+                                .and_then(|a| std::str::from_utf8(&a.value).ok())
+                                .and_then(|s| s.parse::<i64>().ok())
+                            {
+                                new_date = epoch_to_date(ts);
+                            }
+                        }
+                        if let Some(app) = current.as_mut() {
+                            if let Some(d) = new_date {
+                                if d > app.updated {
+                                    app.updated = d;
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -691,6 +742,8 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
             Ok(Event::End(ref e)) => {
                 if e.name().as_ref() == b"developer" {
                     in_developer_block = false;
+                } else if e.name().as_ref() == b"releases" {
+                    in_releases = false;
                 } else if e.name().as_ref() == b"component" {
                     if let Some(mut app) = current.take() {
                         if !app.id.is_empty() {
@@ -861,8 +914,9 @@ fn inject_native_stubs(apps: &mut HashMap<String, AppInfo>) {
 
     for (fp_id_lower, rpm_name) in &fp_to_rpm {
         // Find the flatpak entry by case-insensitive ID match
+        let fp_id_lc = fp_id_lower.to_lowercase();
         let fp_entry = apps.iter().find(|(_, a)| {
-            a.source == "flatpak" && a.id.to_lowercase() == *fp_id_lower
+            a.source == "flatpak" && a.id.to_lowercase() == fp_id_lc
         }).map(|(k, a)| (k.clone(), a.clone()));
 
         let Some((fp_key, fp_entry)) = fp_entry else { continue };

@@ -55,6 +55,41 @@ fn write_pid_file() {
     let _ = std::fs::write(&path, std::process::id().to_string());
 }
 
+/// Invalidate expensive data caches whenever the app version changes.
+///
+/// ~/.cache/software-center holds the repo catalog (repoquery.tsv), the Home
+/// feeds (picks/popular/new/recently_updated.json) and the daemon's update
+/// state (daemon-update-cache.json). After a software update these can
+/// describe the old install, so they are wiped once per version bump. QML
+/// caches are keyed by source-hash and self-invalidate, so they are left alone.
+fn invalidate_cache_on_version_change() -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let dir = std::path::PathBuf::from(&home).join(".cache/software-center");
+    let marker = dir.join("cache-version");
+    let version = env!("CARGO_PKG_VERSION");
+    let mut changed = true;
+    if let Ok(s) = std::fs::read_to_string(&marker) {
+        changed = s.trim() != version;
+    }
+    if !changed {
+        return false;
+    }
+    let _ = std::fs::create_dir_all(&dir);
+    for name in [
+        "repoquery.tsv",
+        "new_apps.json",
+        "picks.json",
+        "popular.json",
+        "recently_updated.json",
+        "daemon-update-cache.json",
+    ] {
+        let _ = std::fs::remove_file(dir.join(name));
+    }
+    let _ = std::fs::write(&marker, version);
+    log::info!("software-center {version}: data caches invalidated (fresh rebuild).");
+    true
+}
+
 /// Locate the daemon binary: prefer a sibling in the same directory as this
 /// binary (covers dev builds in target/debug/), fall back to PATH.
 fn daemon_binary() -> std::path::PathBuf {
@@ -111,6 +146,15 @@ fn main() {
     }
 
     write_pid_file();
+
+    // After an update the tray daemon may still be running the old binary and
+    // serving stale caches — restart it whenever the app version changed.
+    if invalidate_cache_on_version_change() {
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", "software-center-tray$"])
+            .stdout(std::process::Stdio::null())
+            .status();
+    }
     ensure_daemon_running();
 
     // If launched with --tray, write a flag so QML starts the window hidden.

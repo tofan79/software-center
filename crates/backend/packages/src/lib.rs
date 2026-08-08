@@ -75,6 +75,8 @@ pub struct NativeApp {
     #[serde(default)]
     pub update_pattern: String,
     #[serde(default)]
+    pub updated: String,  // latest AppStream <release date="YYYY-MM-DD"> (empty if none)
+    #[serde(default)]
     pub sources: Vec<SourceOption>, // populated in get_app_by_id for detail page
     #[serde(default)]
     pub remotes: Vec<String>, // all flatpak remote names this app was found in (e.g. ["flathub", "cosmic"]); empty for non-flatpak
@@ -111,6 +113,7 @@ impl From<&AppInfo> for NativeApp {
             update_source: String::new(),
             update_url: String::new(),
             update_pattern: String::new(),
+            updated: a.updated.clone(),
             sources: Vec::new(),
             remotes: a.remotes.clone(),
         }
@@ -160,6 +163,57 @@ fn fp_installed(installed_fp: &HashSet<String>, id: &str) -> bool {
     installed_fp.contains(fp_bare(id))
 }
 
+/// Base names (without ".desktop") of installed .desktop files, from all the
+/// scopes a native package could drop them in. Used to detect installed native
+/// apps whose AppStream `package_name` doesn't match the real RPM name — e.g.
+/// the Telegram stub that claims `telegram` while the actual RPM is
+/// `telegram-desktop`, or COPR apps whose AppStream is missing entirely.
+pub fn get_installed_desktops() -> HashSet<String> {
+    let mut dirs: Vec<std::path::PathBuf> = vec![
+        "/usr/share/applications".into(),
+        "/usr/local/share/applications".into(),
+        "/var/lib/flatpak/exports/share/applications".into(),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        dirs.push(std::path::PathBuf::from(&home).join(".local/share/applications"));
+        dirs.push(
+            std::path::PathBuf::from(home)
+                .join(".local/share/flatpak/exports/share/applications"),
+        );
+    }
+    let mut set = HashSet::new();
+    for dir in dirs {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            if let Some(name) = e.file_name().to_str() {
+                if name.ends_with(".desktop") {
+                    set.insert(name.trim_end_matches(".desktop").to_string());
+                }
+            }
+        }
+    }
+    set
+}
+
+/// True when a native (RPM) app is installed: either its RPM package name is in
+/// the installed set, or a .desktop file matching its AppStream component id
+/// exists on disk.
+fn native_is_installed(
+    pkg: &str,
+    id: &str,
+    installed_rpm: &HashSet<String>,
+    installed_desktops: &HashSet<String>,
+) -> bool {
+    if !pkg.is_empty() && installed_rpm.contains(pkg) {
+        return true;
+    }
+    let bare = id
+        .trim_start_matches("native:")
+        .trim_start_matches("flatpak:")
+        .trim_end_matches(".desktop");
+    installed_desktops.contains(bare) || installed_desktops.contains(&format!("{}.desktop", bare))
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /// Return all available apps from AppStream (native + flatpak), with installed status.
@@ -167,6 +221,7 @@ pub fn get_available() -> Result<Vec<NativeApp>> {
     let appstream = get_appstream();
     let installed_rpm = get_installed_packages()?;
     let installed_fp = get_installed_flatpaks();
+    let desktops = get_installed_desktops();
 
     let apps: Vec<NativeApp> = appstream
         .values()
@@ -176,7 +231,7 @@ pub fn get_available() -> Result<Vec<NativeApp>> {
             if a.source == "flatpak" {
                 app.installed = fp_installed(&installed_fp, &a.id);
             } else {
-                app.installed = installed_rpm.contains(&a.package_name);
+                app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
             }
             app
         })
@@ -564,6 +619,7 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
     let appstream = get_appstream();
     let installed_rpm = get_installed_packages()?;
     let installed_fp = get_installed_flatpaks();
+    let desktops = get_installed_desktops();
     let q = query.to_lowercase();
 
     let mut scored: Vec<(u8, NativeApp)> = Vec::new();
@@ -573,7 +629,7 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
         if a.source == "flatpak" {
             app.installed = fp_installed(&installed_fp, &a.id);
         } else {
-            app.installed = installed_rpm.contains(&a.package_name);
+            app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
         }
         if !is_browseable(&app) { continue; }
 
@@ -674,6 +730,7 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
     let appstream = get_appstream();
     let installed_rpm = get_installed_packages()?;
     let installed_fp = get_installed_flatpaks();
+    let desktops = get_installed_desktops();
     let cat = category.to_lowercase();
 
     let mut raw: Vec<NativeApp> = Vec::new();
@@ -684,7 +741,38 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
         if a.source == "flatpak" {
             app.installed = fp_installed(&installed_fp, &a.id);
         } else {
-            app.installed = installed_rpm.contains(&a.package_name);
+            app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
+        }
+        raw.push(app);
+    }
+
+    let mut results: Vec<NativeApp> =
+        merge_multi_source(raw).into_values().collect();
+    enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
+    results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    Ok(results)
+}
+
+/// Return all browseable apps from a single install source ("dnf" or "flatpak").
+/// Unlike categories, the source pages list every app from that source so users
+/// can browse everything the system repos / Flathub have to offer.
+pub fn get_by_source(source: &str) -> Result<Vec<NativeApp>> {
+    let appstream = get_appstream();
+    let installed_rpm = get_installed_packages()?;
+    let installed_fp = get_installed_flatpaks();
+    let desktops = get_installed_desktops();
+
+    let mut raw: Vec<NativeApp> = Vec::new();
+    for a in appstream.values() {
+        let mut app = NativeApp::from(a);
+        if !is_browseable(&app) { continue; }
+        let is_fp = a.source == "flatpak";
+        if source == "flatpak" {
+            if !is_fp { continue; }
+            app.installed = fp_installed(&installed_fp, &a.id);
+        } else {
+            if is_fp { continue; }
+            app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
         }
         raw.push(app);
     }
@@ -697,7 +785,6 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
 }
 
 /// Look up a single app by its AppStream ID, including available install sources.
-/// The returned NativeApp has its `sources` field populated for use by the detail page.
 pub fn get_app_by_id(app_id: &str) -> Result<Option<NativeApp>> {
     let appstream = get_appstream();
     let installed_rpm = get_installed_packages()?;
@@ -718,11 +805,21 @@ pub fn get_app_by_id(app_id: &str) -> Result<Option<NativeApp>> {
     if a.source == "flatpak" {
         app.installed = fp_installed(&installed_fp, &a.id);
     } else {
-        app.installed = installed_rpm.contains(&a.package_name);
+        app.installed = native_is_installed(
+            &a.package_name,
+            &a.id,
+            &installed_rpm,
+            &get_installed_desktops(),
+        );
     }
 
     // Build sources list for the detail page install-source dropdown
     app.sources = build_sources(&app, app_id, &appstream, &installed_rpm, &installed_fp);
+    // A merged app is installed when any of its available sources is installed
+    // (e.g. the native Zed RPM is installed while the Flathub copy is not).
+    if !app.sources.is_empty() {
+        app.installed = app.sources.iter().any(|s| s.installed);
+    }
 
     // Prefer flatpak screenshots for native apps — Flathub CDN is reliable,
     // Fedora swcatalog screenshots often have encoding/format issues.
@@ -748,6 +845,7 @@ pub fn get_addons_for_app(app_id: &str, source_type: &str) -> Result<Vec<serde_j
     let appstream = get_appstream();
     let installed_fp = get_installed_flatpaks();
     let installed_rpm = get_installed_packages()?;
+    let desktops = get_installed_desktops();
     let is_flatpak_source = source_type == "flatpak";
 
     let mut addons: Vec<serde_json::Value> = appstream
@@ -761,7 +859,7 @@ pub fn get_addons_for_app(app_id: &str, source_type: &str) -> Result<Vec<serde_j
             let installed = if a.source == "flatpak" {
                 fp_installed(&installed_fp, &a.id)
             } else {
-                installed_rpm.contains(&a.package_name)
+                native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops)
             };
             serde_json::json!({
                 "id":           a.id,
@@ -882,6 +980,10 @@ fn merge_multi_source(apps: Vec<NativeApp>) -> HashMap<String, NativeApp> {
             if primary.description.is_empty() && !alt.description.is_empty() {
                 primary.description = alt.description.clone();
             }
+            // Keep the newest release date across merged sources (ISO sortable).
+            if primary.updated < alt.updated {
+                primary.updated = alt.updated.clone();
+            }
         }
         primary.sources = sources;
         // Installed if any source is installed
@@ -907,6 +1009,7 @@ fn build_sources(
     // the app is installed in one of them.
     let installed_fp_system = get_installed_flatpaks_scoped("--system");
     let installed_fp_user = get_installed_flatpaks_scoped("--user");
+    let desktops = get_installed_desktops();
 
     if primary.source == "flatpak" {
         // Always show both the system and user variant of the primary's own
@@ -941,7 +1044,7 @@ fn build_sources(
         if let Some(nat) = alt {
             sources.push(source_option_from_app_info(
                 nat,
-                installed_rpm.contains(&nat.package_name),
+                native_is_installed(&nat.package_name, &nat.id, &installed_rpm, &desktops),
                 "",
                 false,
             ));
@@ -1000,6 +1103,7 @@ fn enrich_sources(
     installed_rpm: &HashSet<String>,
     installed_fp: &HashSet<String>,
 ) {
+    let desktops = get_installed_desktops();
     for app in apps.iter_mut() {
         if !app.sources.is_empty() {
             continue; // already merged from merge_multi_source
@@ -1007,15 +1111,26 @@ fn enrich_sources(
         let name_lc = app.name.to_lowercase();
 
         if app.source == "flatpak" {
-            // Look for native alternate by name
-            let alt = appstream.values().find(|info| {
-                info.source != "flatpak"
-                    && info.name.to_lowercase() == name_lc
-                    && !info.package_name.is_empty()
-                    && !info.pkg_name_guessed
+            // Look for native alternate:
+            // 1. Explicit flatpak-to-rpm mapping by app id (authoritative RPM name)
+            // 2. Same-name native entry (non-guessed package name)
+            let rpm_via_map = scenter_appstream::load_flatpak_to_rpm()
+                .get(&app.id.to_lowercase())
+                .and_then(|rpm| {
+                    appstream.values().find(|info| {
+                        info.source != "flatpak" && info.package_name == *rpm
+                    })
+                });
+            let alt = rpm_via_map.or_else(|| {
+                appstream.values().find(|info| {
+                    info.source != "flatpak"
+                        && info.name.to_lowercase() == name_lc
+                        && !info.package_name.is_empty()
+                        && !info.pkg_name_guessed
+                })
             });
             if let Some(nat) = alt {
-                let nat_installed = installed_rpm.contains(&nat.package_name);
+                let nat_installed = native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
                 let fp_src = source_option_from_native_app(app);
                 let nat_src = source_option_from_app_info(nat, nat_installed, "", false);
                 app.sources = vec![nat_src, fp_src]; // native first
@@ -1456,7 +1571,7 @@ fn rpm_is_installed(pkg: &str) -> bool {
 
 /// Return set of ALL installed RPM package names (for installed-status checks in browse/search).
 /// Uses rpm -qa — only called for available/search/category, not for the installed list UI.
-fn get_installed_packages() -> Result<HashSet<String>> {
+pub fn get_installed_packages() -> Result<HashSet<String>> {
     // For available() / search() / get_by_category() we use packages.list if present,
     // so the installed badge is accurate without querying the entire rpm database.
     // Fall back to rpm -qa only when packages.list doesn't exist (traditional Fedora).
@@ -1493,7 +1608,7 @@ fn get_installed_packages() -> Result<HashSet<String>> {
 }
 
 /// Return set of installed Flatpak app IDs.
-fn get_installed_flatpaks() -> HashSet<String> {
+pub fn get_installed_flatpaks() -> HashSet<String> {
     let Ok(out) = Command::new("flatpak")
         .args(["list", "--app", "--columns=application"])
         .output()
@@ -1612,6 +1727,7 @@ impl Default for NativeApp {
             update_source: String::new(),
             update_url: String::new(),
             update_pattern: String::new(),
+            updated: String::new(),
             sources: Vec::new(),
             remotes: Vec::new(),
         }
