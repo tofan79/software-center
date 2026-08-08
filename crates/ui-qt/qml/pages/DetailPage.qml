@@ -398,10 +398,15 @@ Item {
                     }
                 }
 
-                // Source selector — shown when both native and Flatpak are available
+                // Source selector — shown when both native and Flatpak are
+                // available AND the active source is not yet installed. Once the
+                // app is installed there's nothing to choose between anymore, so
+                // the dropdown hides and only the Remove button stays.
                 ComboBox {
                     id: sourceSelector
-                    visible: app != null && Array.isArray(app.sources) && app.sources.length > 1
+                    visible: app != null
+                             && Array.isArray(app.sources) && app.sources.length > 1
+                             && !(displayApp != null && displayApp.installed === true)
                     width: 160
                     model: {
                         if (!app || !Array.isArray(app.sources)) return [];

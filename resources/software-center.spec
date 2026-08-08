@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.9
+Version:        1.0.10
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -81,6 +81,11 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.10-1
+- Detail page: dropdown pilihan sumber (Fedora (DNF) / Flathub System/User)
+  kini disembunyikan saat aplikasi sudah terinstall — cukup tombol Remove.
+  Sebelumnya dropdown tetap muncul walau app sudah terinstall.
+
 * Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.9-1
 - Label sumber native di dropdown install kini "Fedora (DNF)" agar jelas
   membedakannya dari "Flathub (System)" / "Flathub (User)".
