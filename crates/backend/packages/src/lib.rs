@@ -1194,7 +1194,7 @@ fn user_remote_names() -> HashSet<String> {
 /// Human-readable label for an install source.
 fn source_label(source: &str, remote: &str, user_remote: bool) -> String {
     match source {
-        "native" | "terra" => "Fedora".to_string(),
+        "native" | "terra" => "Fedora (DNF)".to_string(),
         "flatpak" => {
             let base = if remote.is_empty() {
                 "Flathub".to_string()

@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.8
+Version:        1.0.9
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -81,6 +81,10 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.9-1
+- Label sumber native di dropdown install kini "Fedora (DNF)" agar jelas
+  membedakannya dari "Flathub (System)" / "Flathub (User)".
+
 * Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.8-1
 - Fix: opsi sumber native (Fedora) untuk paket yang tidak ada di repo
   manapun kini disembunyikan — sebelumnya muncul lalu install gagal
