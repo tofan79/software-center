@@ -77,6 +77,12 @@ pub fn is_upgrade_running() -> bool {
 /// Read-only — runs without root. Returns a Vec of raw JSON values, one per
 /// updatable package: {"name", "current_version", "available_version", "repo"}.
 pub fn check_packages_script() -> Vec<serde_json::Value> {
+    // A manual "check for updates" is the natural moment to drop the repoquery
+    // cache: metadata is about to be refreshed anyway, so the next search picks
+    // up any newly published packages (e.g. a just-finished COPR build) instead
+    // of reusing a stale index.
+    scenter_packages::clear_repo_cache();
+
     let installed_map = match installed_evr_map() {
         Some(m) => m,
         None => return Vec::new(),

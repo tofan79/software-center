@@ -1353,7 +1353,12 @@ struct RepoPkg {
     summary: String,
 }
 
-const REPO_CACHE_TTL_SECS: u64 = 4 * 3600;
+/// Cache is still fresh when it's younger than every repo metadata snapshot —
+/// the dnf5 cache dir under /var/cache/libdnf5 gets a fresh repomd.xml whenever
+/// any repo (Fedora, updates, COPR...) publishes new metadata. So instead of a
+/// blind TTL, we refresh exactly when something actually changed.
+const REPO_CACHE_FRESH_FOR_SECS: u64 = 2 * 3600;
+const REPO_CACHE_MIN_AGE_SECS: u64 = 60;
 const REPO_QUERY_TIMEOUT_SECS: u64 = 180;
 
 /// True for package names that are clearly not standalone applications
@@ -1379,6 +1384,13 @@ fn repo_cache_path() -> std::path::PathBuf {
     base.join("software-center").join("repoquery.tsv")
 }
 
+/// Delete the repoquery cache. Called whenever the user checks for updates so
+/// the next search reflects freshly published repo metadata (e.g. a COPR build
+/// that just finished) instead of waiting out the freshness window.
+pub fn clear_repo_cache() {
+    let _ = std::fs::remove_file(repo_cache_path());
+}
+
 fn parse_repo_cache(text: &str) -> Vec<RepoPkg> {
     let mut pkgs: Vec<RepoPkg> = Vec::new();
     let mut seen: HashSet<&str> = HashSet::new();
@@ -1396,22 +1408,61 @@ fn parse_repo_cache(text: &str) -> Vec<RepoPkg> {
     pkgs
 }
 
-/// All packages available in enabled repositories, cached to disk for 4h.
+/// Newest mtime across all dnf5 repo metadata files (repomd.xml) under
+/// /var/cache/libdnf5, or None when no dnf cache exists (never installed / purged).
+fn dnf_metadata_newest() -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for dir in std::fs::read_dir("/var/cache/libdnf5").ok()? {
+        let dir = dir.ok()?.path();
+        let repomd = dir.join("repodata").join("repomd.xml");
+        if let Ok(meta) = std::fs::metadata(&repomd) {
+            if let Ok(m) = meta.modified() {
+                newest = Some(match newest {
+                    Some(n) if n > m => n,
+                    _ => m,
+                });
+            }
+        }
+    }
+    newest
+}
+
+/// True when the repoquery cache can be reused: the cache file exists, is not
+/// older than dnf's newest repo metadata (nothing new published since), and has
+/// not hit the hard freshness window. A minimum age avoids re-querying when dnf
+/// just wrote metadata seconds ago for unrelated reasons.
+fn repo_cache_fresh(path: &std::path::Path) -> bool {
+    let Ok(meta) = path.metadata() else { return false };
+    let Ok(cache_mtime) = meta.modified() else { return false };
+    if let Ok(elapsed) = cache_mtime.elapsed() {
+        if elapsed.as_secs() > REPO_CACHE_FRESH_FOR_SECS {
+            return false;
+        }
+    }
+    if let Some(dnf_newest) = dnf_metadata_newest() {
+        match cache_mtime.duration_since(dnf_newest) {
+            Ok(_) => return true, // cache newer than all repo metadata → fresh
+            Err(e) if e.duration().as_secs() < REPO_CACHE_MIN_AGE_SECS => return false,
+            Err(_) => return true, // cache older, but only by milliseconds of noise
+        }
+    }
+    true
+}
+
+/// All packages available in enabled repositories, cached to disk.
+/// The cache is refreshed whenever any repo publishes new metadata (repomd.xml
+/// newer than the cache) or after REPO_CACHE_FRESH_FOR_SECS as a safety net.
 /// Runs `dnf5 -y repoquery` (auto-accepts any missing repo GPG key prompt and
 /// queries every enabled repo: Fedora, updates, RPM Fusion, Terra, COPRs,
 /// third-party). Callers must run this off the UI thread — the first call can
 /// take a while.
 fn get_repo_packages() -> Vec<RepoPkg> {
     let path = repo_cache_path();
-    if let Ok(meta) = path.metadata() {
-        if let Ok(modified) = meta.modified() {
-            if modified.elapsed().map(|e| e.as_secs() < REPO_CACHE_TTL_SECS).unwrap_or(false) {
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    let pkgs = parse_repo_cache(&text);
-                    if !pkgs.is_empty() {
-                        return pkgs;
-                    }
-                }
+    if repo_cache_fresh(&path) {
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            let pkgs = parse_repo_cache(&text);
+            if !pkgs.is_empty() {
+                return pkgs;
             }
         }
     }

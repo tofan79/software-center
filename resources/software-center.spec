@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.6
+Version:        1.0.7
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -81,6 +81,13 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.7-1
+- Cache search repoquery kini otomatis basi saat metadata repo dnf5 berubah
+  (misal COPR selesai build), tidak lagi menunggu TTL 4 jam.
+- "Check for updates" menghapus cache repoquery sekalian, jadi hasil search
+  langsung memuat paket baru (contoh: paket COPR yang baru rilis).
+- Hapus cache manual via rm tidak lagi diperlukan.
+
 * Sat Aug 08 2026 mindset <mindset@users.noreply.github.com> - 1.0.6-1
 - Perbaiki sinkronisasi CLI/GUI: semua query dnf5 read-only
   (check-update, list --installed, repoquery, repo list) kini pakai
