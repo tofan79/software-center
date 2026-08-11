@@ -19,22 +19,36 @@ Item {
     function loadAll() {
         loading = true;
         loadRepos();
-        loading = false;
     }
 
     function loadRepos() {
-        var list = [];
-        try { list = JSON.parse(backend.listRepos()); } catch(e) {}
-        var copr = [], sys = [], fed = [];
-        for (var i = 0; i < list.length; i++) {
-            var r = list[i];
-            if (r.kind === "copr")      copr.push(r);
-            else if (r.kind === "fedora") fed.push(r);
-            else                        sys.push(r);
+        backend.loadRepos();
+        reposPollTimer.start();
+    }
+
+    Timer {
+        id: reposPollTimer
+        interval: 250
+        repeat: true
+        onTriggered: {
+            backend.pollRepos();
+            if (backend.reposReady) {
+                reposPollTimer.stop();
+                loading = false;
+                var list = [];
+                try { list = JSON.parse(backend.readRepos()); } catch(e) {}
+                var copr = [], sys = [], fed = [];
+                for (var i = 0; i < list.length; i++) {
+                    var r = list[i];
+                    if (r.kind === "copr")      copr.push(r);
+                    else if (r.kind === "fedora") fed.push(r);
+                    else                        sys.push(r);
+                }
+                coprRepos   = copr;
+                systemRepos = sys;
+                fedoraRepos = fed;
+            }
         }
-        coprRepos   = copr;
-        systemRepos = sys;
-        fedoraRepos = fed;
     }
 
     function toggleRepo(id, enabled) {

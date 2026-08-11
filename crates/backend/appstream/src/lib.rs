@@ -269,12 +269,17 @@ fn load_appstream_inner() -> Result<HashMap<String, AppInfo>> {
         }
         // Synthesize icon_url fallback for apps without a local icon:
         //   org.kde.*  → apps.kde.org SVG (mirrors Python _FetchThread logic)
-        //   other Flatpak → Flathub CDN PNG (predictable URL pattern)
+        //   Flathub-only Flatpak → Flathub CDN PNG (predictable URL pattern)
+        // Non-flathub remotes are skipped: their app IDs don't exist on the
+        // Flathub CDN, so a synthesized URL would 404.
         if app.icon_path.is_empty() && app.icon_url.is_empty() {
             let clean_id = app.id.trim_start_matches("flatpak:").trim_end_matches(".desktop");
             if clean_id.starts_with("org.kde.") {
                 app.icon_url = format!("https://apps.kde.org/app-icons/{}.svg", clean_id);
-            } else if app.source == "flatpak" {
+            } else if app.source == "flatpak"
+                && (app.remotes.is_empty()
+                    || app.remotes.iter().any(|r| r.eq_ignore_ascii_case("flathub")))
+            {
                 // Flathub CDN: /repo/appstream/x86_64/icons/128x128/{id}.png
                 app.icon_url = format!(
                     "https://dl.flathub.org/repo/appstream/x86_64/icons/128x128/{}.png",

@@ -599,7 +599,7 @@ Item {
                         smooth: true
                         clip: true
                         asynchronous: true
-                        cache: false
+                        cache: true
                     }
 
                     // Loading / error overlay

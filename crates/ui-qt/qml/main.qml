@@ -633,6 +633,7 @@ ApplicationWindow {
             target: backend
             function onCurrentPageChanged() {
                 switch (backend.currentPage) {
+                    case 0: homePage.activate(); break;
                     case 3: installedPage.activate(); break;
                     case 4: updatesPage.activate(); break;
                     case 5: appImagesPage.activate(); break;

@@ -45,6 +45,22 @@ fn addons_log_path() -> std::path::PathBuf {
     std::env::temp_dir().join("software-center-addons.log")
 }
 
+fn unused_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center-unused.json")
+}
+
+fn repos_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center-repos.json")
+}
+
+fn runtimes_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center-runtimes.json")
+}
+
+fn remotes_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center-remotes.json")
+}
+
 fn settings_path() -> std::path::PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
     std::path::PathBuf::from(home).join(".config/software-center/settings.json")
@@ -135,6 +151,26 @@ pub struct SoftwareBackend {
     addonsReady:   qt_property!(bool; NOTIFY addonsStateChanged),
     addonsStateChanged: qt_signal!(),
     addons_shared: Option<Arc<AtomicBool>>,
+
+    // Unused-packages count (Settings → Maintenance) — runs dnf5, off UI thread.
+    unusedReady:   qt_property!(bool; NOTIFY unusedStateChanged),
+    unusedStateChanged: qt_signal!(),
+    unused_shared: Option<Arc<AtomicBool>>,
+
+    // DNF repo list (Settings → Repositories) — runs dnf5, off UI thread.
+    reposReady:   qt_property!(bool; NOTIFY reposStateChanged),
+    reposStateChanged: qt_signal!(),
+    repos_shared: Option<Arc<AtomicBool>>,
+
+    // Installed flatpak runtimes (Installed page) — runs flatpak, off UI thread.
+    runtimesReady:   qt_property!(bool; NOTIFY runtimesStateChanged),
+    runtimesStateChanged: qt_signal!(),
+    runtimes_shared: Option<Arc<AtomicBool>>,
+
+    // Flatpak remotes (Settings → Flatpak Repositories) — runs flatpak, off UI thread.
+    remotesReady:   qt_property!(bool; NOTIFY remotesStateChanged),
+    remotesStateChanged: qt_signal!(),
+    remotes_shared: Option<Arc<AtomicBool>>,
 
     // Install queue state (banner at window bottom)
     queueCount:           qt_property!(i32;     NOTIFY queueStateChanged),
@@ -371,11 +407,36 @@ pub struct SoftwareBackend {
             .into()
     }),
 
-    // ── Installed Flatpak runtimes/add-ons (sync) ────────────────────────────
+    // ── Installed Flatpak runtimes/add-ons (async) ────────────────────────────
 
-    loadFlatpakRuntimes: qt_method!(fn loadFlatpakRuntimes(&mut self) -> QString {
-        let runtimes = scenter_packages::get_installed_flatpak_runtimes();
-        QString::from(serde_json::to_string(&runtimes).unwrap_or_else(|_| "[]".to_string()))
+    loadFlatpakRuntimes: qt_method!(fn loadFlatpakRuntimes(&mut self) {
+        let ready = Arc::new(AtomicBool::new(false));
+        self.runtimes_shared = Some(ready.clone());
+        self.runtimesReady = false;
+        self.runtimesStateChanged();
+        let _ = std::fs::write(runtimes_log_path(), "[]");
+        std::thread::spawn(move || {
+            let runtimes = scenter_packages::get_installed_flatpak_runtimes();
+            let _ = std::fs::write(
+                runtimes_log_path(),
+                serde_json::to_string(&runtimes).unwrap_or_else(|_| "[]".to_string()),
+            );
+            ready.store(true, Ordering::Relaxed);
+        });
+    }),
+
+    pollRuntimes: qt_method!(fn pollRuntimes(&mut self) {
+        if let Some(ready) = &self.runtimes_shared {
+            if ready.load(Ordering::Relaxed) {
+                self.runtimes_shared = None;
+                self.runtimesReady = true;
+                self.runtimesStateChanged();
+            }
+        }
+    }),
+
+    readRuntimes: qt_method!(fn readRuntimes(&mut self) -> QString {
+        std::fs::read_to_string(runtimes_log_path()).unwrap_or_else(|_| "[]".to_string()).into()
     }),
 
     // ── AppImage settings ─────────────────────────────────────────────────────
@@ -658,26 +719,76 @@ pub struct SoftwareBackend {
 
     /// List all dnf repositories (enabled + disabled) as JSON array.
     /// [{"id","name","enabled","kind","owner","project"}]
-    listRepos: qt_method!(fn listRepos(&mut self) -> QString {
-        let repos: Vec<serde_json::Value> = scenter_updates::list_dnf_repos()
-            .into_iter()
-            .map(|r| serde_json::json!({
-                "id":      r.id,
-                "name":    r.name,
-                "enabled": r.enabled,
-                "kind":    r.kind,
-                "owner":   r.owner,
-                "project": r.project,
-            }))
-            .collect();
-        serde_json::to_string(&repos).unwrap_or_else(|_| "[]".to_string()).into()
+    loadRepos: qt_method!(fn loadRepos(&mut self) {
+        let ready = Arc::new(AtomicBool::new(false));
+        self.repos_shared = Some(ready.clone());
+        self.reposReady = false;
+        self.reposStateChanged();
+        let _ = std::fs::write(repos_log_path(), "[]");
+        std::thread::spawn(move || {
+            let repos: Vec<serde_json::Value> = scenter_updates::list_dnf_repos()
+                .into_iter()
+                .map(|r| serde_json::json!({
+                    "id":      r.id,
+                    "name":    r.name,
+                    "enabled": r.enabled,
+                    "kind":    r.kind,
+                    "owner":   r.owner,
+                    "project": r.project,
+                }))
+                .collect();
+            let _ = std::fs::write(
+                repos_log_path(),
+                serde_json::to_string(&repos).unwrap_or_else(|_| "[]".to_string()),
+            );
+            ready.store(true, Ordering::Relaxed);
+        });
+    }),
+
+    pollRepos: qt_method!(fn pollRepos(&mut self) {
+        if let Some(ready) = &self.repos_shared {
+            if ready.load(Ordering::Relaxed) {
+                self.repos_shared = None;
+                self.reposReady = true;
+                self.reposStateChanged();
+            }
+        }
+    }),
+
+    readRepos: qt_method!(fn readRepos(&mut self) -> QString {
+        std::fs::read_to_string(repos_log_path()).unwrap_or_else(|_| "[]".to_string()).into()
     }),
 
     /// List orphaned (unused dependency) packages as JSON array of names.
-    listUnusedPackages: qt_method!(fn listUnusedPackages(&mut self) -> QString {
-        serde_json::to_string(&scenter_updates::list_unused_packages())
-            .unwrap_or_else(|_| "[]".to_string())
-            .into()
+    /// Async — `dnf5 -q repoquery --unneeded` runs on a worker thread.
+    loadUnusedPackages: qt_method!(fn loadUnusedPackages(&mut self) {
+        let ready = Arc::new(AtomicBool::new(false));
+        self.unused_shared = Some(ready.clone());
+        self.unusedReady = false;
+        self.unusedStateChanged();
+        let _ = std::fs::write(unused_log_path(), "[]");
+        std::thread::spawn(move || {
+            let _ = std::fs::write(
+                unused_log_path(),
+                serde_json::to_string(&scenter_updates::list_unused_packages())
+                    .unwrap_or_else(|_| "[]".to_string()),
+            );
+            ready.store(true, Ordering::Relaxed);
+        });
+    }),
+
+    pollUnused: qt_method!(fn pollUnused(&mut self) {
+        if let Some(ready) = &self.unused_shared {
+            if ready.load(Ordering::Relaxed) {
+                self.unused_shared = None;
+                self.unusedReady = true;
+                self.unusedStateChanged();
+            }
+        }
+    }),
+
+    readUnused: qt_method!(fn readUnused(&mut self) -> QString {
+        std::fs::read_to_string(unused_log_path()).unwrap_or_else(|_| "[]".to_string()).into()
     }),
 
     /// Enable/disable any dnf repo by id. COPR repos route through the dnf5
@@ -1208,24 +1319,47 @@ pub struct SoftwareBackend {
 
     // ── Flatpak remote management ─────────────────────────────────────────────
 
-    getFlatpakRemotes: qt_method!(fn getFlatpakRemotes(&mut self) -> QString {
-        let remotes = scenter_flatpak::get_remotes();
-        let has_flathub = scenter_flatpak::has_flathub();
-        let has_flathub_system = scenter_flatpak::has_flathub_scoped(true);
-        let has_flathub_user = scenter_flatpak::has_flathub_scoped(false);
-        let has_cosmic_welcome = scenter_flatpak::has_cosmic_welcome();
-        let has_cosmic_remote_system = scenter_flatpak::has_cosmic_remote_scoped(true);
-        let has_cosmic_remote_user = scenter_flatpak::has_cosmic_remote_scoped(false);
-        serde_json::json!({
-            "remotes": remotes,
-            "has_flathub": has_flathub,
-            "has_flathub_system": has_flathub_system,
-            "has_flathub_user": has_flathub_user,
-            "has_cosmic_welcome": has_cosmic_welcome,
-            "has_cosmic_remote_system": has_cosmic_remote_system,
-            "has_cosmic_remote_user": has_cosmic_remote_user,
-        })
-            .to_string().into()
+    loadFlatpakRemotes: qt_method!(fn loadFlatpakRemotes(&mut self) {
+        let ready = Arc::new(AtomicBool::new(false));
+        self.remotes_shared = Some(ready.clone());
+        self.remotesReady = false;
+        self.remotesStateChanged();
+        let _ = std::fs::write(remotes_log_path(), "{}");
+        std::thread::spawn(move || {
+            let remotes = scenter_flatpak::get_remotes();
+            let has_flathub = scenter_flatpak::has_flathub();
+            let has_flathub_system = scenter_flatpak::has_flathub_scoped(true);
+            let has_flathub_user = scenter_flatpak::has_flathub_scoped(false);
+            let has_cosmic_welcome = scenter_flatpak::has_cosmic_welcome();
+            let has_cosmic_remote_system = scenter_flatpak::has_cosmic_remote_scoped(true);
+            let has_cosmic_remote_user = scenter_flatpak::has_cosmic_remote_scoped(false);
+            let json = serde_json::json!({
+                "remotes": remotes,
+                "has_flathub": has_flathub,
+                "has_flathub_system": has_flathub_system,
+                "has_flathub_user": has_flathub_user,
+                "has_cosmic_welcome": has_cosmic_welcome,
+                "has_cosmic_remote_system": has_cosmic_remote_system,
+                "has_cosmic_remote_user": has_cosmic_remote_user,
+            })
+                .to_string();
+            let _ = std::fs::write(remotes_log_path(), json);
+            ready.store(true, Ordering::Relaxed);
+        });
+    }),
+
+    pollRemotes: qt_method!(fn pollRemotes(&mut self) {
+        if let Some(ready) = &self.remotes_shared {
+            if ready.load(Ordering::Relaxed) {
+                self.remotes_shared = None;
+                self.remotesReady = true;
+                self.remotesStateChanged();
+            }
+        }
+    }),
+
+    readRemotes: qt_method!(fn readRemotes(&mut self) -> QString {
+        std::fs::read_to_string(remotes_log_path()).unwrap_or_else(|_| "{}".to_string()).into()
     }),
 
     addFlatpakRemote: qt_method!(fn addFlatpakRemote(&mut self, name: QString, url: QString, system: bool) -> QString {

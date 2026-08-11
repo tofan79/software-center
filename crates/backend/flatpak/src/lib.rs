@@ -5,7 +5,6 @@ use anyhow::Result;
 use scenter_appstream::{AppInfo, get_appstream};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 
 const FLATHUB_URL: &str = "https://dl.flathub.org/repo/flathub.flatpakrepo";
@@ -401,31 +400,6 @@ pub fn update_runtime_stream(app_id: &str, branch: &str, installation: &str) -> 
         .map(|s| s.to_string())
         .collect();
     run_flatpak_stream_owned(owned)
-}
-
-/// Install a new Flatpak runtime branch that is not yet installed.
-pub fn install_ref_stream(remote: &str, app_id: &str, branch: &str, installation: &str) -> impl Iterator<Item = String> {
-    let scope = if installation == "user" { "--user" } else { "--system" };
-    let ref_spec = format!("{}//{}", app_id, branch);
-    let mut cmd = Command::new("flatpak");
-    if remote.is_empty() {
-        cmd.args(["install", scope, "--noninteractive", "-y"]);
-    } else {
-        cmd.args(["install", scope, "--noninteractive", "-y", remote]);
-    }
-    cmd.arg(&ref_spec);
-    let mut child = cmd
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn flatpak");
-    let stdout = child.stdout.take().unwrap();
-    let lines: Vec<String> = BufReader::new(stdout)
-        .lines()
-        .map_while(Result::ok)
-        .collect();
-    let code = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
-    lines.into_iter().chain(std::iter::once(format!("__done__{}", code)))
 }
 
 /// Install from a local .flatpak bundle (system-wide via pkexec).

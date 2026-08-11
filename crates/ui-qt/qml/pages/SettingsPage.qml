@@ -24,8 +24,22 @@ Item {
     }
 
     function loadMaintUnused() {
-        try { maintUnusedCount = JSON.parse(backend.listUnusedPackages()).length; }
-        catch(e) { maintUnusedCount = 0; }
+        backend.loadUnusedPackages();
+        unusedPollTimer.start();
+    }
+
+    Timer {
+        id: unusedPollTimer
+        interval: 250
+        repeat: true
+        onTriggered: {
+            backend.pollUnused();
+            if (backend.unusedReady) {
+                unusedPollTimer.stop();
+                try { maintUnusedCount = JSON.parse(backend.readUnused()).length; }
+                catch(e) { maintUnusedCount = 0; }
+            }
+        }
     }
 
     function maintRun(which) {
@@ -332,24 +346,38 @@ Item {
                 property bool statusOk: true
 
                 function loadRemotes() {
-                    try {
-                        var json = backend.getFlatpakRemotes();
-                        var data = JSON.parse(json);
-                        remotes = data.remotes || [];
-                        hasFlathub = data.has_flathub === true;
-                        hasFlathubSystem = data.has_flathub_system === true;
-                        hasFlathubUser = data.has_flathub_user === true;
-                        hasCosmicWelcome = data.has_cosmic_welcome === true;
-                        hasCosmicRemoteSystem = data.has_cosmic_remote_system === true;
-                        hasCosmicRemoteUser = data.has_cosmic_remote_user === true;
-                    } catch(e) {
-                        remotes = [];
-                        hasFlathub = false;
-                        hasFlathubSystem = false;
-                        hasFlathubUser = false;
-                        hasCosmicWelcome = false;
-                        hasCosmicRemoteSystem = false;
-                        hasCosmicRemoteUser = false;
+                    backend.loadFlatpakRemotes();
+                    remotesPollTimer.start();
+                }
+
+                Timer {
+                    id: remotesPollTimer
+                    interval: 250
+                    repeat: true
+                    onTriggered: {
+                        backend.pollRemotes();
+                        if (backend.remotesReady) {
+                            remotesPollTimer.stop();
+                            try {
+                                var json = backend.readRemotes();
+                                var data = JSON.parse(json);
+                                remotes = data.remotes || [];
+                                hasFlathub = data.has_flathub === true;
+                                hasFlathubSystem = data.has_flathub_system === true;
+                                hasFlathubUser = data.has_flathub_user === true;
+                                hasCosmicWelcome = data.has_cosmic_welcome === true;
+                                hasCosmicRemoteSystem = data.has_cosmic_remote_system === true;
+                                hasCosmicRemoteUser = data.has_cosmic_remote_user === true;
+                            } catch(e) {
+                                remotes = [];
+                                hasFlathub = false;
+                                hasFlathubSystem = false;
+                                hasFlathubUser = false;
+                                hasCosmicWelcome = false;
+                                hasCosmicRemoteSystem = false;
+                                hasCosmicRemoteUser = false;
+                            }
+                        }
                     }
                 }
 
@@ -647,6 +675,5 @@ Item {
 
     Component.onCompleted: {
         loadSettings();
-        loadMaintUnused();
     }
 }

@@ -7,9 +7,7 @@ Item {
     id: homePage
 
     function activate() {
-        if (homeData === null && !loading) {
-            loadData();
-        }
+        loadData();
     }
 
     property var homeData: null

@@ -77,11 +77,10 @@ pub fn is_upgrade_running() -> bool {
 /// Read-only — runs without root. Returns a Vec of raw JSON values, one per
 /// updatable package: {"name", "current_version", "available_version", "repo"}.
 pub fn check_packages_script() -> Vec<serde_json::Value> {
-    // A manual "check for updates" is the natural moment to drop the repoquery
-    // cache: metadata is about to be refreshed anyway, so the next search picks
-    // up any newly published packages (e.g. a just-finished COPR build) instead
-    // of reusing a stale index.
-    scenter_packages::clear_repo_cache();
+    // The repoquery cache invalidates itself when any repo publishes new
+    // metadata (repomd.xml newer than the cache), so freshly published COPR
+    // builds surface in search without a manual clear — and without forcing a
+    // full `dnf5 repoquery` on the next search just because we checked updates.
 
     let installed_map = match installed_evr_map() {
         Some(m) => m,
@@ -620,7 +619,7 @@ pub fn list_dnf_repos() -> Vec<DnfRepo> {
 /// (orphans) via `dnf5 -q repoquery --unneeded`. Read-only, no root.
 pub fn list_unused_packages() -> Vec<String> {
     let out = Command::new("dnf5")
-        .args(["-q", "--skip-file-locks", "repoquery", "--unneeded"])
+        .args(["-q", "--skip-file-locks", "repoquery", "--unneeded", "--qf", "%{name}\n"])
         .output()
         .ok();
     let Some(out) = out else { return Vec::new() };
@@ -631,10 +630,7 @@ pub fn list_unused_packages() -> Vec<String> {
     text.lines()
         .map(|l| l.trim())
         .filter(|l| !l.is_empty())
-        .map(|l| {
-            // name-epoch:version-release.arch  →  name
-            l.rsplitn(2, ':').next().unwrap_or("").to_string()
-        })
+        .map(String::from)
         .collect()
 }
 

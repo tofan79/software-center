@@ -23,10 +23,24 @@ Item {
         loading = true;
         allApps = [];
         rpmApps = []; flatpakApps = []; flatpakRuntimes = []; appImages = [];
-        // Load runtimes synchronously (fast flatpak list call)
-        try { flatpakRuntimes = JSON.parse(backend.loadFlatpakRuntimes()); } catch(e) { flatpakRuntimes = []; }
+        // Load runtimes asynchronously (flatpak list runs off the UI thread)
+        backend.loadFlatpakRuntimes();
+        runtimesPollTimer.start();
         backend.loadInstalled();
         pollTimer.start();
+    }
+
+    Timer {
+        id: runtimesPollTimer
+        interval: 250
+        repeat: true
+        onTriggered: {
+            backend.pollRuntimes();
+            if (backend.runtimesReady) {
+                runtimesPollTimer.stop();
+                try { flatpakRuntimes = JSON.parse(backend.readRuntimes()); } catch(e) { flatpakRuntimes = []; }
+            }
+        }
     }
 
     function filterApps(arr) {

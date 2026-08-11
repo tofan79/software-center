@@ -1222,12 +1222,6 @@ fn source_label(source: &str, remote: &str, user_remote: bool) -> String {
     }
 }
 
-/// Install a native package via `pkexec dnf5 install <pkg>`.
-/// Streams output lines; last line is "__done__<code>".
-pub fn install_stream(package_name: &str) -> impl Iterator<Item = String> + '_ {
-    run_scenter_stream(&["install", "-y", package_name])
-}
-
 /// Remove a native package via `pkexec dnf5 remove <pkg>`.
 pub fn remove_stream(package_name: &str) -> impl Iterator<Item = String> + '_ {
     run_scenter_stream(&["remove", "-y", package_name])
@@ -1386,13 +1380,6 @@ fn repo_cache_path() -> std::path::PathBuf {
     base.join("software-center").join("repoquery.tsv")
 }
 
-/// Delete the repoquery cache. Called whenever the user checks for updates so
-/// the next search reflects freshly published repo metadata (e.g. a COPR build
-/// that just finished) instead of waiting out the freshness window.
-pub fn clear_repo_cache() {
-    let _ = std::fs::remove_file(repo_cache_path());
-}
-
 fn parse_repo_cache(text: &str) -> Vec<RepoPkg> {
     let mut pkgs: Vec<RepoPkg> = Vec::new();
     let mut seen: HashSet<&str> = HashSet::new();
@@ -1444,8 +1431,8 @@ fn repo_cache_fresh(path: &std::path::Path) -> bool {
     if let Some(dnf_newest) = dnf_metadata_newest() {
         match cache_mtime.duration_since(dnf_newest) {
             Ok(_) => return true, // cache newer than all repo metadata → fresh
-            Err(e) if e.duration().as_secs() < REPO_CACHE_MIN_AGE_SECS => return false,
-            Err(_) => return true, // cache older, but only by milliseconds of noise
+            Err(e) if e.duration().as_secs() < REPO_CACHE_MIN_AGE_SECS => return true,
+            Err(_) => return false, // repo metadata newer → something was published → stale
         }
     }
     true
@@ -1635,20 +1622,37 @@ fn rpm_is_installed(pkg: &str) -> bool {
 }
 
 /// Return set of ALL installed RPM package names (for installed-status checks in browse/search).
-/// Uses rpm -qa — only called for available/search/category, not for the installed list UI.
+/// Uses a single `rpm -qa` instead of one `rpm -q --whatprovides` subprocess per package.
+/// Only called for available/search/category, not for the installed list UI.
 pub fn get_installed_packages() -> Result<HashSet<String>> {
-    // For available() / search() / get_by_category() we use packages.list if present,
-    // so the installed badge is accurate without querying the entire rpm database.
-    // Fall back to rpm -qa only when packages.list doesn't exist (traditional Fedora).
+    // Base set from one rpm -qa. Resolving against the full rpmdb is what makes
+    // the installed badge accurate without querying per package.
+    let out = Command::new("rpm")
+        .args(["-qa", "--queryformat", "%{NAME}\n"])
+        .output()?;
+    let mut resolved: HashSet<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+
+    // When packages.list exists, also resolve its virtual provides (e.g.
+    // "nodejs" → "nodejs22") for entries not already matched by rpm -qa.
+    // Batched in chunks so we never build a command line near ARG_MAX.
     let list = read_packages_list();
     if !list.is_empty() {
-        let mut resolved = HashSet::new();
-        for pkg in &list {
-            // Keep the original name (for exact matches in available/search views)
-            resolved.insert(pkg.clone());
-            // Also resolve the actual provider name (e.g. "nodejs22" for "nodejs")
+        let unresolved: Vec<&str> = list
+            .iter()
+            .filter(|pkg| !resolved.contains(pkg.as_str()))
+            .map(String::as_str)
+            .collect();
+        for chunk in unresolved.chunks(200) {
             if let Ok(out) = Command::new("rpm")
-                .args(["-q", "--whatprovides", "--queryformat", "%{NAME}\n", pkg])
+                .arg("-q")
+                .arg("--whatprovides")
+                .arg("--queryformat")
+                .arg("%{NAME}\n")
+                .args(chunk)
                 .output()
             {
                 for line in String::from_utf8_lossy(&out.stdout).lines() {
@@ -1659,17 +1663,8 @@ pub fn get_installed_packages() -> Result<HashSet<String>> {
                 }
             }
         }
-        return Ok(resolved);
     }
-    // Traditional Fedora fallback
-    let out = Command::new("rpm")
-        .args(["-qa", "--queryformat", "%{NAME}\\n"])
-        .output()?;
-    let packages = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(String::from)
-        .collect();
-    Ok(packages)
+    Ok(resolved)
 }
 
 /// Return set of installed Flatpak app IDs.
@@ -1748,12 +1743,22 @@ fn run_scenter_stream(args: &[&str]) -> impl Iterator<Item = String> {
         .spawn()
         .expect("Failed to spawn pkexec dnf5");
 
+    // Drain stderr on a background thread: dnf5 can write well over a pipe
+    // buffer's worth of warnings/progress, and reading stdout to EOF first
+    // would deadlock on the unread stderr pipe otherwise.
+    let stderr = child.stderr.take().unwrap();
+    let drain = std::thread::spawn(move || {
+        let mut sink = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut BufReader::new(stderr), &mut sink);
+    });
+
     let stdout = child.stdout.take().unwrap();
     let lines: Vec<String> = BufReader::new(stdout)
         .lines()
         .map_while(Result::ok)
         .collect();
     let code = child.wait().map(|s| s.code().unwrap_or(1)).unwrap_or(1);
+    let _ = drain.join();
 
     lines
         .into_iter()
