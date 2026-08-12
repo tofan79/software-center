@@ -89,6 +89,32 @@ fn append_log(text: &str) {
     }
 }
 
+/// Append a timestamped activity line to /tmp/software-center/activity.log.
+/// This is a clear, human-readable trail of every user-triggered operation
+/// (install/remove/update, repo/remote changes, …) plus errors, so issues can
+/// be diagnosed without watching a terminal.
+fn activity_log_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center").join("activity.log")
+}
+
+fn log_activity(text: &str) {
+    use std::io::Write;
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
+    let line = format!("[{:02}:{:02}:{:02}] {}\n", h, m, s, text);
+    let path = activity_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(&path) {
+        let _ = f.write_all(line.as_bytes());
+    }
+    log::info!("{}", text);
+}
+
 /// Which scope (--system or --user) an installed flatpak app/runtime is actually in.
 /// Falls back to --system if it isn't found in either (matches prior behavior).
 fn flatpak_installed_scope(app_id: &str) -> &'static str {
@@ -194,6 +220,21 @@ pub struct SoftwareBackend {
     // ── Navigation ────────────────────────────────────────────────────────────
 
     navigate: qt_method!(fn navigate(&mut self, page: i32) {
+        let name = match page {
+            0 => "Home",
+            1 => "Search",
+            2 => "Category",
+            3 => "Installed",
+            4 => "Updates",
+            5 => "AppImages",
+            6 => "Settings",
+            7 => "Detail",
+            8 => "LocalFile",
+            9 => "DNF",
+            10 => "Flatpak",
+            _ => "Unknown",
+        };
+        log_activity(&format!("Navigate → {name} (page {page})"));
         self.currentPage = page;
         self.currentPageChanged();
     }),
@@ -264,6 +305,7 @@ pub struct SoftwareBackend {
     // ── Home page ─────────────────────────────────────────────────────────────
 
     loadHome: qt_method!(fn loadHome(&mut self) {
+        log_activity("Home: loading feeds (picks/popular/updated/new)");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -318,6 +360,7 @@ pub struct SoftwareBackend {
     // ── Installed page ────────────────────────────────────────────────────────
 
     loadInstalled: qt_method!(fn loadInstalled(&mut self) {
+        log_activity("Installed: refreshing installed apps list");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -352,6 +395,7 @@ pub struct SoftwareBackend {
 
     loadAppById: qt_method!(fn loadAppById(&mut self, app_id: QString) {
         let app_id = app_id.to_string();
+        log_activity(&format!("Detail: load app {app_id}"));
         // Use a dedicated channel so this never interferes with an ongoing install op.
         let ready = Arc::new(AtomicBool::new(false));
         self.detail_shared = Some(ready.clone());
@@ -376,6 +420,7 @@ pub struct SoftwareBackend {
     loadAddons: qt_method!(fn loadAddons(&mut self, app_id: QString, source_type: QString) {
         let app_id = app_id.to_string();
         let source_type = source_type.to_string();
+        log_activity(&format!("Detail: load add-ons for {app_id} (source={source_type})"));
         let ready = Arc::new(AtomicBool::new(false));
         self.addons_shared = Some(ready.clone());
         self.addonsReady = false;
@@ -410,6 +455,7 @@ pub struct SoftwareBackend {
     // ── Installed Flatpak runtimes/add-ons (async) ────────────────────────────
 
     loadFlatpakRuntimes: qt_method!(fn loadFlatpakRuntimes(&mut self) {
+        log_activity("Flatpak runtimes: refreshing installed runtimes");
         let ready = Arc::new(AtomicBool::new(false));
         self.runtimes_shared = Some(ready.clone());
         self.runtimesReady = false;
@@ -493,6 +539,7 @@ pub struct SoftwareBackend {
         let kind     = kind.to_string();
         let action   = action.to_string();
         let pkg_name = pkg_name.to_string();
+        log_activity(&format!("Install local file: {path} (kind={kind}, action={action})"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -543,6 +590,7 @@ pub struct SoftwareBackend {
                 }
                 _ => { append_log("Unknown file type"); false }
             };
+            log_activity(&format!("Install local file {}: {}", if ok { "OK" } else { "FAILED" }, path));
             shared.result.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
@@ -565,6 +613,7 @@ pub struct SoftwareBackend {
 
     search: qt_method!(fn search(&mut self, query: QString) {
         let query = query.to_string();
+        log_activity(&format!("Search: \"{query}\""));
         self.searchQuery = query.clone().into();
         self.searchQueryChanged();
         self.start_op();
@@ -587,6 +636,7 @@ pub struct SoftwareBackend {
 
     loadCategory: qt_method!(fn loadCategory(&mut self, category: QString) {
         let category = category.to_string();
+        log_activity(&format!("Load category: {category}"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -605,6 +655,7 @@ pub struct SoftwareBackend {
 
     loadSource: qt_method!(fn loadSource(&mut self, source: QString) {
         let source = source.to_string();
+        log_activity(&format!("Load source: {source}"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -624,6 +675,7 @@ pub struct SoftwareBackend {
     // ── Updates ───────────────────────────────────────────────────────────────
 
     checkUpdates: qt_method!(fn checkUpdates(&mut self) {
+        log_activity("Check updates started");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -660,18 +712,21 @@ pub struct SoftwareBackend {
             }
             let _ = std::fs::write(&cache_path, &result_json);
 
+            log_activity(&format!("Check updates done: {total} update(s) found"));
             shared.result.store(1, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
     }),
 
     rebootSystem: qt_method!(fn rebootSystem(&mut self) {
+        log_activity("Schedule system reboot");
         std::thread::spawn(|| {
             scenter_updates::schedule_reboot();
         });
     }),
 
     upgradePackages: qt_method!(fn upgradePackages(&mut self) {
+        log_activity("Upgrade: all system packages");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -688,6 +743,7 @@ pub struct SoftwareBackend {
                     if !line.is_empty() { append_log(&line); }
                 }
             }
+            log_activity(&format!("Upgrade all: {}", if exit_code == 0 { "OK" } else { "FAILED" }));
             shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
@@ -695,6 +751,7 @@ pub struct SoftwareBackend {
 
     upgradePackage: qt_method!(fn upgradePackage(&mut self, name: QString) {
         let name = name.to_string();
+        log_activity(&format!("Upgrade package: {name}"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -710,6 +767,7 @@ pub struct SoftwareBackend {
                     if !line.is_empty() { append_log(&line); }
                 }
             }
+            log_activity(&format!("Upgrade package {name}: {}", if exit_code == 0 { "OK" } else { "FAILED" }));
             shared.result.store(if exit_code == 0 { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
         });
@@ -720,6 +778,7 @@ pub struct SoftwareBackend {
     /// List all dnf repositories (enabled + disabled) as JSON array.
     /// [{"id","name","enabled","kind","owner","project"}]
     loadRepos: qt_method!(fn loadRepos(&mut self) {
+        log_activity("DNF Repositories: refreshing list...");
         let ready = Arc::new(AtomicBool::new(false));
         self.repos_shared = Some(ready.clone());
         self.reposReady = false;
@@ -796,6 +855,7 @@ pub struct SoftwareBackend {
     setRepoEnabled: qt_method!(fn setRepoEnabled(&mut self, id: QString, enabled: bool) {
         let id = id.to_string();
         let enabled = enabled;
+        log_activity(&format!("{} repository: {id}", if enabled { "Enable" } else { "Disable" }));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -837,6 +897,7 @@ pub struct SoftwareBackend {
             let _ = std::fs::write(log_path(), "Invalid COPR spec. Use owner/project (e.g. tofan79/software-center).\n");
             return;
         }
+        log_activity(&format!("Add COPR repo: {owner_project}"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -857,6 +918,7 @@ pub struct SoftwareBackend {
     /// Remove a COPR repo entirely (deletes its .repo file). Runs pkexec.
     removeCopr: qt_method!(fn removeCopr(&mut self, owner_project: QString) {
         let owner_project = owner_project.to_string().trim().to_string();
+        log_activity(&format!("Remove COPR repo: {owner_project}"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -876,6 +938,7 @@ pub struct SoftwareBackend {
 
     /// Clear the dnf metadata cache. Runs pkexec.
     cleanDnfCache: qt_method!(fn cleanDnfCache(&mut self) {
+        log_activity("Clean dnf cache");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -895,6 +958,7 @@ pub struct SoftwareBackend {
 
     /// Remove unused/orphan packages (dnf autoremove). Runs pkexec.
     removeUnusedPackages: qt_method!(fn removeUnusedPackages(&mut self) {
+        log_activity("Remove unused packages (dnf autoremove)");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -914,6 +978,7 @@ pub struct SoftwareBackend {
 
     /// Remove unused Flatpak runtimes/extensions. Global cache cleanup.
     cleanFlatpakUnused: qt_method!(fn cleanFlatpakUnused(&mut self) {
+        log_activity("Clean unused Flatpak runtimes/extensions");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -934,6 +999,7 @@ pub struct SoftwareBackend {
     /// Remove orphaned AppImage files (stale downloads, unreferenced binaries,
     /// sidecars whose binary is gone). Quick local op, no root.
     cleanAppImageCache: qt_method!(fn cleanAppImageCache(&mut self) {
+        log_activity("Clean orphaned AppImage cache");
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -954,6 +1020,7 @@ pub struct SoftwareBackend {
         let id = id.to_string();
         let source = source.to_string();
         let remote = remote.to_string();
+        log_activity(&format!("Update Flatpak: {id} (source={source}, remote={remote})"));
         self.start_op();
         let shared = self.get_shared();
         std::thread::spawn(move || {
@@ -1064,6 +1131,7 @@ pub struct SoftwareBackend {
         self.queueStateChanged();
         self.start_op();
         let shared = self.get_shared();
+        log_activity(&format!("Install start: {id} (source={source}, remote={remote}, user={user_remote})"));
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
             use std::process::{Command, Stdio};
@@ -1161,6 +1229,7 @@ pub struct SoftwareBackend {
                 if let Some(t) = stderr_thread { t.join().ok(); }
                 let success = child.wait().map(|s| s.success()).unwrap_or(false);
                 shared.result.store(if success { 1 } else { 2 }, Ordering::Relaxed);
+                log_activity(&format!("Install {}: {id} ({})", if success { "OK" } else { "FAILED" }, source));
                 // Signal done before joining crawl so it sees running=false and exits.
                 shared.running.store(false, Ordering::Relaxed);
                 crawl.join().ok();
@@ -1209,6 +1278,7 @@ pub struct SoftwareBackend {
         self.queueStateChanged();
         self.start_op();
         let shared = self.get_shared();
+        log_activity(&format!("Remove start: {id} (source={source})"));
         std::thread::spawn(move || {
             use std::process::{Command, Stdio};
             use std::io::{BufRead, BufReader};
@@ -1293,6 +1363,7 @@ pub struct SoftwareBackend {
 
             shared.result.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
+            log_activity(&format!("Remove {}: {id} ({})", if ok { "OK" } else { "FAILED" }, source));
             crawl.join().ok();
         });
     }),
@@ -1320,6 +1391,7 @@ pub struct SoftwareBackend {
     // ── Flatpak remote management ─────────────────────────────────────────────
 
     loadFlatpakRemotes: qt_method!(fn loadFlatpakRemotes(&mut self) {
+        log_activity("Flatpak remotes: refreshing list...");
         let ready = Arc::new(AtomicBool::new(false));
         self.remotes_shared = Some(ready.clone());
         self.remotesReady = false;
@@ -1363,27 +1435,37 @@ pub struct SoftwareBackend {
     }),
 
     addFlatpakRemote: qt_method!(fn addFlatpakRemote(&mut self, name: QString, url: QString, system: bool) -> QString {
+        log_activity(&format!("Add flatpak remote: {name} ({url}, {})", if system { "system" } else { "user" }));
         let (ok, msg) = scenter_flatpak::add_remote(&name.to_string(), &url.to_string(), system);
+        if !ok { log_activity(&format!("Add flatpak remote FAILED: {name} — {msg}")); }
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
 
     addFlathub: qt_method!(fn addFlathub(&mut self, system: bool) -> QString {
+        log_activity(&format!("Add Flathub ({})", if system { "system" } else { "user" }));
         let (ok, msg) = scenter_flatpak::add_flathub(system);
+        if !ok { log_activity(&format!("Add Flathub FAILED: {msg}")); }
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
 
     addCosmicRemote: qt_method!(fn addCosmicRemote(&mut self, system: bool) -> QString {
+        log_activity(&format!("Add COSMIC remote ({})", if system { "system" } else { "user" }));
         let (ok, msg) = scenter_flatpak::add_cosmic_remote(system);
+        if !ok { log_activity(&format!("Add COSMIC remote FAILED: {msg}")); }
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
 
     removeFlatpakRemote: qt_method!(fn removeFlatpakRemote(&mut self, name: QString, system: bool) -> QString {
+        log_activity(&format!("Remove flatpak remote: {name} ({})", if system { "system" } else { "user" }));
         let (ok, msg) = scenter_flatpak::remove_remote(&name.to_string(), system);
+        if !ok { log_activity(&format!("Remove flatpak remote FAILED: {name} — {msg}")); }
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
 
     setFlatpakRemoteEnabled: qt_method!(fn setFlatpakRemoteEnabled(&mut self, name: QString, enabled: bool, system: bool) -> QString {
+        log_activity(&format!("Set flatpak remote {name} enabled={enabled} ({})", if system { "system" } else { "user" }));
         let (ok, msg) = scenter_flatpak::set_remote_enabled(&name.to_string(), enabled, system);
+        if !ok { log_activity(&format!("Set flatpak remote FAILED: {name} — {msg}")); }
         serde_json::json!({ "ok": ok, "msg": msg }).to_string().into()
     }),
 
@@ -1402,11 +1484,13 @@ pub struct SoftwareBackend {
     }),
 
     saveSettings: qt_method!(fn saveSettings(&mut self, json: QString) {
+        let json = json.to_string();
+        log_activity(&format!("Settings saved: {json}"));
         let path = settings_path();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&path, json.to_string());
+        let _ = std::fs::write(&path, json);
     }),
 
     // ── Startup helpers ───────────────────────────────────────────────────────

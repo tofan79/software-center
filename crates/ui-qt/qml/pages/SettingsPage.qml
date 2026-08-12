@@ -361,21 +361,21 @@ Item {
                             try {
                                 var json = backend.readRemotes();
                                 var data = JSON.parse(json);
-                                remotes = data.remotes || [];
-                                hasFlathub = data.has_flathub === true;
-                                hasFlathubSystem = data.has_flathub_system === true;
-                                hasFlathubUser = data.has_flathub_user === true;
-                                hasCosmicWelcome = data.has_cosmic_welcome === true;
-                                hasCosmicRemoteSystem = data.has_cosmic_remote_system === true;
-                                hasCosmicRemoteUser = data.has_cosmic_remote_user === true;
+                                flatpakTab.remotes = data.remotes || [];
+                                flatpakTab.hasFlathub = data.has_flathub === true;
+                                flatpakTab.hasFlathubSystem = data.has_flathub_system === true;
+                                flatpakTab.hasFlathubUser = data.has_flathub_user === true;
+                                flatpakTab.hasCosmicWelcome = data.has_cosmic_welcome === true;
+                                flatpakTab.hasCosmicRemoteSystem = data.has_cosmic_remote_system === true;
+                                flatpakTab.hasCosmicRemoteUser = data.has_cosmic_remote_user === true;
                             } catch(e) {
-                                remotes = [];
-                                hasFlathub = false;
-                                hasFlathubSystem = false;
-                                hasFlathubUser = false;
-                                hasCosmicWelcome = false;
-                                hasCosmicRemoteSystem = false;
-                                hasCosmicRemoteUser = false;
+                                flatpakTab.remotes = [];
+                                flatpakTab.hasFlathub = false;
+                                flatpakTab.hasFlathubSystem = false;
+                                flatpakTab.hasFlathubUser = false;
+                                flatpakTab.hasCosmicWelcome = false;
+                                flatpakTab.hasCosmicRemoteSystem = false;
+                                flatpakTab.hasCosmicRemoteUser = false;
                             }
                         }
                     }

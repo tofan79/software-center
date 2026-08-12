@@ -122,8 +122,49 @@ fn ensure_daemon_running() {
     }
 }
 
+/// Tee writer: mirrors every log line to stderr (live terminal) and appends it
+/// to the persistent log file under /tmp/software-center/ so QML/Qt errors
+/// (console.log, warnings, "Invalid write", …) never vanish when the app is
+/// launched from a desktop menu instead of a terminal.
+struct TeeWriter {
+    file: std::fs::File,
+}
+
+impl std::io::Write for TeeWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write_all(buf);
+        self.file.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        let _ = std::io::stderr().flush();
+        self.file.flush()
+    }
+}
+
+fn log_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("software-center").join("software-center.log")
+}
+
+fn init_logging() {
+    let path = log_file();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let file = std::fs::OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(&path)
+        .expect("open software-center log file");
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .parse_default_env()
+        .target(env_logger::Target::Pipe(Box::new(TeeWriter { file })))
+        .init();
+}
+
 fn main() {
-    env_logger::init();
+    init_logging();
+    log::info!("software-center {} starting.", env!("CARGO_PKG_VERSION"));
     std::env::set_var("QML_XHR_ALLOW_FILE_READ", "1");
 
     // Collect any file path passed via MIME type association (%f in .desktop)

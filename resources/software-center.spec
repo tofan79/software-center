@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.11
+Version:        1.0.12
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -80,6 +80,20 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Wed Aug 12 2026 mindset <mindset@users.noreply.github.com> - 1.0.12-1
+- Fix tab Flatpak Repositories di Settings selalu kosong ("No Flatpak remotes
+  configured") padahal backend benar: assignment hasil parse ditulis sebagai
+  `remotes = ...` (bukan `flatpakTab.remotes = ...`) di dalam Timer.onTriggered,
+  sehingga QML men-resolve ke global property dan error "Invalid write to global
+  property" — data tidak pernah tersimpan. Semua assignment kini di-prefiks
+  eksplisit dengan `flatpakTab.` (remotes, hasFlathub, hasFlathubSystem/User,
+  hasCosmic*).
+- Log aktivitas baru: setiap aksi di-log ke /tmp/software-center/activity.log
+  ber-timestamp (navigasi halaman, install/remove/upgrade, repo & remote DNF/
+  Flatpak, clean cache, search, detail, local file install) + error QML/Qt
+  kini ikut tertangkap ke /tmp/software-center/software-center.log (env_logger
+  dialihkan ke file + stderr), jadi masalah bisa didiagnosis tanpa terminal.
+
 * Tue Aug 11 2026 mindset <mindset@users.noreply.github.com> - 1.0.11-1
 - Fix freeze UI startup: repoquery --unneeded (dnf5) yang berjalan sinkron saat
   app dibuka (SettingsPage Component.onCompleted) diubah jadi async — tidak
