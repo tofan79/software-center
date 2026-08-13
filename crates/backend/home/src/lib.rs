@@ -5,7 +5,7 @@
 // Python's _appstream_cache pattern (load once, reuse across all sections).
 
 use anyhow::Result;
-use scenter_appstream::{AppInfo, get_appstream};
+use scenter_appstream::{get_appstream, AppInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -98,13 +98,15 @@ impl From<&AppInfo> for HomeApp {
 /// If all section caches are fresh, returns immediately without loading appstream.
 pub async fn load_all() -> (Vec<HomeApp>, Vec<HomeApp>, Vec<HomeApp>, Vec<HomeApp>) {
     // Fast path: all caches valid — skip expensive appstream parse entirely
-    let picks_c   = cache_path("picks.json");
+    let picks_c = cache_path("picks.json");
     let popular_c = cache_path("popular.json");
     let updated_c = cache_path("recently_updated.json");
-    let new_c     = cache_path("new_apps.json");
+    let new_c = cache_path("new_apps.json");
 
-    if cache_valid(&picks_c) && cache_valid(&popular_c)
-        && cache_valid(&updated_c) && cache_valid(&new_c)
+    if cache_valid(&picks_c)
+        && cache_valid(&popular_c)
+        && cache_valid(&updated_c)
+        && cache_valid(&new_c)
     {
         if let (Some(picks), Some(popular), Some(updated), Some(new)) = (
             read_cache(&picks_c),
@@ -243,9 +245,9 @@ fn resolve_one<'a>(id: &str, appstream: &'a HashMap<String, AppInfo>) -> Option<
     }
 
     // Last-resort linear scan (case-insensitive id match)
-    appstream.values().find(|a| {
-        a.id.trim_end_matches(".desktop").to_lowercase() == clean_lc
-    })
+    appstream
+        .values()
+        .find(|a| a.id.trim_end_matches(".desktop").to_lowercase() == clean_lc)
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────

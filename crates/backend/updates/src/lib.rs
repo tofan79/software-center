@@ -37,7 +37,10 @@ pub fn get_system_status() -> SystemStatus {
             .and_then(|c| {
                 c.lines()
                     .find(|l| l.starts_with(&format!("{key}=")))
-                    .and_then(|l| l.split_once('=').map(|(_, v)| v.trim_matches('"').to_string()))
+                    .and_then(|l| {
+                        l.split_once('=')
+                            .map(|(_, v)| v.trim_matches('"').to_string())
+                    })
             })
             .unwrap_or_default()
     };
@@ -58,10 +61,7 @@ pub fn get_system_status() -> SystemStatus {
 
 /// Returns true if a dnf5 operation is currently running (dnf5 process alive).
 pub fn is_upgrade_running() -> bool {
-    let out = Command::new("pgrep")
-        .arg("dnf5")
-        .output()
-        .ok();
+    let out = Command::new("pgrep").arg("dnf5").output().ok();
     match out {
         Some(o) if o.status.success() => {
             // pgrep succeeded → at least one matching process found.
@@ -131,7 +131,9 @@ pub fn check_packages_script() -> Vec<serde_json::Value> {
     }
 
     updates.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("")
+        a["name"]
+            .as_str()
+            .unwrap_or("")
             .to_lowercase()
             .cmp(&b["name"].as_str().unwrap_or("").to_lowercase())
     });
@@ -199,7 +201,9 @@ fn installed_evr_map() -> Option<HashMap<String, String>> {
 /// Strip the architecture suffix from a "name.arch" string. Accepts multi-dot
 /// names (e.g. "python3.12-tkinter.x86_64" → "python3.12-tkinter").
 fn strip_arch(name_arch: &str) -> &str {
-    let known = ["x86_64", "i686", "aarch64", "armv7hl", "armv6hl", "ppc64le", "s390x", "noarch", "i386"];
+    let known = [
+        "x86_64", "i686", "aarch64", "armv7hl", "armv6hl", "ppc64le", "s390x", "noarch", "i386",
+    ];
     for arch in known {
         if let Some(base) = name_arch.strip_suffix(&format!(".{arch}")) {
             return base;
@@ -223,9 +227,7 @@ fn friendly_repo(repo: &str) -> String {
         return "Terra".to_string();
     }
     if repo.starts_with("rpmfusion-") {
-        let pretty = repo
-            .trim_start_matches("rpmfusion-")
-            .replace('-', " ");
+        let pretty = repo.trim_start_matches("rpmfusion-").replace('-', " ");
         return format!("RPM Fusion ({})", pretty);
     }
     if repo.starts_with("fedora") || repo == "updates" {
@@ -251,7 +253,13 @@ pub fn enrich_package_updates(raw: Vec<serde_json::Value>) -> Vec<serde_json::Va
 
     // Seed from installed-packages list — already has fully resolved icons/names.
     for app in scenter_packages::get_installed().unwrap_or_default() {
-        insert_pkg_meta(&mut meta, &app.package_name, &app.icon_path, &app.icon_url, &app.name);
+        insert_pkg_meta(
+            &mut meta,
+            &app.package_name,
+            &app.icon_path,
+            &app.icon_url,
+            &app.name,
+        );
         insert_pkg_meta(&mut meta, &app.id, &app.icon_path, &app.icon_url, &app.name);
     }
 
@@ -262,7 +270,13 @@ pub fn enrich_package_updates(raw: Vec<serde_json::Value>) -> Vec<serde_json::Va
         } else {
             String::new()
         };
-        insert_pkg_meta(&mut meta, &app.package_name, &app.icon_path, &app.icon_url, &friendly);
+        insert_pkg_meta(
+            &mut meta,
+            &app.package_name,
+            &app.icon_path,
+            &app.icon_url,
+            &friendly,
+        );
         insert_pkg_meta(&mut meta, &app.id, &app.icon_path, &app.icon_url, &friendly);
     }
 
@@ -301,19 +315,22 @@ fn insert_pkg_meta(
     if key.is_empty() {
         return;
     }
-    let entry = map
-        .entry(key.to_string())
-        .or_insert_with(|| (icon_path.to_string(), icon_url.to_string(), display_name.to_string()));
+    let entry = map.entry(key.to_string()).or_insert_with(|| {
+        (
+            icon_path.to_string(),
+            icon_url.to_string(),
+            display_name.to_string(),
+        )
+    });
     if entry.0.is_empty() && entry.1.is_empty() {
         entry.0 = icon_path.to_string();
         entry.1 = icon_url.to_string();
     } else if entry.0.is_empty() && !icon_path.is_empty() {
         entry.0 = icon_path.to_string();
     }
-    if !display_name.is_empty() && display_name != key
-        && (entry.2.is_empty() || entry.2 == key) {
-            entry.2 = display_name.to_string();
-        }
+    if !display_name.is_empty() && display_name != key && (entry.2.is_empty() || entry.2 == key) {
+        entry.2 = display_name.to_string();
+    }
 }
 
 // ── Shared cache helpers ─────────────────────────────────────────────────────
@@ -334,12 +351,17 @@ pub fn daemon_cache_path() -> std::path::PathBuf {
 /// value to match.
 pub fn prune_cache_entry(section: &str, id_key: &str, id_value: &str) {
     let path = daemon_cache_path();
-    let Ok(raw) = std::fs::read_to_string(&path) else { return };
-    let Ok(mut cache) = serde_json::from_str::<serde_json::Value>(&raw) else { return };
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    let Ok(mut cache) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
 
     if let Some(arr) = cache.get_mut(section).and_then(|v| v.as_array_mut()) {
         arr.retain(|entry| {
-            entry.get(id_key)
+            entry
+                .get(id_key)
                 .and_then(|v| v.as_str())
                 .map(|v| v != id_value)
                 .unwrap_or(true)
@@ -378,26 +400,38 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
     while i < input.len() {
         if input[i] == b'\x1b' {
             i += 1;
-            if i >= input.len() { break; }
+            if i >= input.len() {
+                break;
+            }
             match input[i] {
                 b'[' => {
                     // CSI sequence: ESC [ <params> <letter>
                     i += 1;
-                    while i < input.len() && !input[i].is_ascii_alphabetic() { i += 1; }
-                    if i < input.len() { i += 1; }
+                    while i < input.len() && !input[i].is_ascii_alphabetic() {
+                        i += 1;
+                    }
+                    if i < input.len() {
+                        i += 1;
+                    }
                 }
                 b']' => {
                     // OSC sequence: ESC ] ... BEL  or  ESC ] ... ESC backslash
                     i += 1;
                     while i < input.len() {
-                        if input[i] == b'\x07' { i += 1; break; }
+                        if input[i] == b'\x07' {
+                            i += 1;
+                            break;
+                        }
                         if input[i] == b'\x1b' && i + 1 < input.len() && input[i + 1] == b'\\' {
-                            i += 2; break;
+                            i += 2;
+                            break;
                         }
                         i += 1;
                     }
                 }
-                _ => { i += 1; }
+                _ => {
+                    i += 1;
+                }
             }
         } else {
             out.push(input[i]);
@@ -418,7 +452,11 @@ fn drain_reader<R: std::io::Read>(reader: R, tx: std::sync::mpsc::Sender<String>
         match reader.read(&mut buf) {
             Ok(0) => break,
             Ok(n) => {
-                let bytes = if strip { strip_ansi(&buf[..n]) } else { buf[..n].to_vec() };
+                let bytes = if strip {
+                    strip_ansi(&buf[..n])
+                } else {
+                    buf[..n].to_vec()
+                };
                 pending.push_str(&String::from_utf8_lossy(&bytes));
                 let mut start = 0;
                 for (i, b) in pending.bytes().enumerate() {
@@ -506,7 +544,9 @@ pub fn run_stream_owned(cmd: Vec<String>) -> impl Iterator<Item = String> {
                         return;
                     }
                     Err(e) => {
-                        unsafe { libc::close(master_raw); }
+                        unsafe {
+                            libc::close(master_raw);
+                        }
                         let _ = tx.send(format!("Error: {e}"));
                         let _ = tx.send("__done__1".to_string());
                         return;
@@ -514,8 +554,12 @@ pub fn run_stream_owned(cmd: Vec<String>) -> impl Iterator<Item = String> {
                 }
             } else {
                 unsafe {
-                    if slave_out >= 0 { libc::close(slave_out); }
-                    if slave_err >= 0 { libc::close(slave_err); }
+                    if slave_out >= 0 {
+                        libc::close(slave_out);
+                    }
+                    if slave_err >= 0 {
+                        libc::close(slave_err);
+                    }
                     libc::close(slave_raw);
                     libc::close(master_raw);
                 }
@@ -596,7 +640,17 @@ pub fn list_dnf_repos() -> Vec<DnfRepo> {
             id: id.to_string(),
             name,
             enabled: status == "enabled",
-            kind: if id.starts_with("copr:") { "copr".to_string() } else if id == "fedora" || id == "updates" || id.ends_with("-debuginfo") || id.ends_with("-source") { "fedora".to_string() } else { "system".to_string() },
+            kind: if id.starts_with("copr:") {
+                "copr".to_string()
+            } else if id == "fedora"
+                || id == "updates"
+                || id.ends_with("-debuginfo")
+                || id.ends_with("-source")
+            {
+                "fedora".to_string()
+            } else {
+                "system".to_string()
+            },
             owner: String::new(),
             project: String::new(),
         };
@@ -618,7 +672,14 @@ pub fn list_dnf_repos() -> Vec<DnfRepo> {
 /// (orphans) via `dnf5 -q repoquery --unneeded`. Read-only, no root.
 pub fn list_unused_packages() -> Vec<String> {
     let out = Command::new("dnf5")
-        .args(["-q", "--skip-file-locks", "repoquery", "--unneeded", "--qf", "%{name}\n"])
+        .args([
+            "-q",
+            "--skip-file-locks",
+            "repoquery",
+            "--unneeded",
+            "--qf",
+            "%{name}\n",
+        ])
         .output()
         .ok();
     let Some(out) = out else { return Vec::new() };
@@ -681,7 +742,12 @@ pub fn set_repo_enabled_stream(repo_id: &str, enabled: bool) -> impl Iterator<It
 
 /// Stream `pkexec dnf5 clean all` — clears the dnf metadata/cache.
 pub fn clean_dnf_stream() -> impl Iterator<Item = String> {
-    run_stream_owned(vec!["pkexec".into(), "dnf5".into(), "clean".into(), "all".into()])
+    run_stream_owned(vec![
+        "pkexec".into(),
+        "dnf5".into(),
+        "clean".into(),
+        "all".into(),
+    ])
 }
 
 /// Stream `pkexec dnf5 autoremove -y` — removes unused/orphan packages.

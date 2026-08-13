@@ -2,7 +2,7 @@
 // Mirrors src/backend/flatpak.py
 
 use anyhow::Result;
-use scenter_appstream::{AppInfo, get_appstream};
+use scenter_appstream::{get_appstream, AppInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
@@ -106,12 +106,18 @@ pub fn get_installed() -> Result<Vec<FlatpakApp>> {
         let name = parts.get(1).map(|s| s.trim()).unwrap_or(app_id);
         let version = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
         let summary = parts.get(3).map(|s| s.trim()).unwrap_or("").to_string();
-        let origin = parts.get(4).map(|s| s.trim()).unwrap_or("flathub").to_string();
+        let origin = parts
+            .get(4)
+            .map(|s| s.trim())
+            .unwrap_or("flathub")
+            .to_string();
 
         let meta = appstream_flatpak.get(app_id);
         apps.push(FlatpakApp {
             id: app_id.to_string(),
-            name: meta.map(|m| m.name.clone()).unwrap_or_else(|| name.to_string()),
+            name: meta
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| name.to_string()),
             version,
             summary: meta.map(|m| m.summary.clone()).unwrap_or(summary),
             origin,
@@ -158,10 +164,22 @@ pub fn search(query: &str, limit: usize) -> Vec<FlatpakApp> {
         let app_id = parts[0].trim().to_string();
         apps.push(FlatpakApp {
             installed: installed_ids.contains(&app_id),
-            name: parts.get(1).map(|s| s.trim().to_string()).unwrap_or_else(|| app_id.clone()),
-            version: parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default(),
-            summary: parts.get(3).map(|s| s.trim().to_string()).unwrap_or_default(),
-            origin: parts.get(4).map(|s| s.trim().to_string()).unwrap_or_else(|| "flathub".to_string()),
+            name: parts
+                .get(1)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| app_id.clone()),
+            version: parts
+                .get(2)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default(),
+            summary: parts
+                .get(3)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default(),
+            origin: parts
+                .get(4)
+                .map(|s| s.trim().to_string())
+                .unwrap_or_else(|| "flathub".to_string()),
             id: app_id,
             icon: String::new(),
             icon_url: String::new(),
@@ -188,30 +206,32 @@ pub fn search(query: &str, limit: usize) -> Vec<FlatpakApp> {
 /// A single Flatpak update entry — includes both apps and runtimes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlatpakUpdate {
-    pub name:            String,
-    pub app_id:          String,
-    pub version:         String,
+    pub name: String,
+    pub app_id: String,
+    pub version: String,
     pub current_version: String,
-    pub runtime:         bool,
+    pub runtime: bool,
     /// True when this entry is a new runtime branch to install, not an update to an existing one.
     /// e.g. org.gnome.Platform//50 required by an app update, when only //49 is installed.
     #[serde(default)]
-    pub needs_install:   bool,
+    pub needs_install: bool,
     /// The remote to install from when needs_install is true.
     #[serde(default)]
-    pub install_remote:  String,
+    pub install_remote: String,
     /// "system" or "user" — which flatpak installation this update belongs to.
     #[serde(default = "default_system")]
-    pub installation:    String,
+    pub installation: String,
     /// Resolved local icon path (e.g. from flatpak appstream cache or per-app deploy dir).
     #[serde(default)]
-    pub icon_path:       String,
+    pub icon_path: String,
     /// Remote icon URL fallback when no local icon is found.
     #[serde(default)]
-    pub icon_url:        String,
+    pub icon_url: String,
 }
 
-fn default_system() -> String { "system".to_string() }
+fn default_system() -> String {
+    "system".to_string()
+}
 
 /// Return all available Flatpak updates (apps + runtimes) by querying `flatpak`
 /// directly for both the system and user installations — no separate
@@ -251,16 +271,25 @@ pub fn get_all_updates() -> Vec<FlatpakUpdate> {
             .collect();
 
         let out = Command::new("flatpak")
-            .args(["remote-ls", flag, "--updates", "--columns=application,branch,version,options"])
+            .args([
+                "remote-ls",
+                flag,
+                "--updates",
+                "--columns=application,branch,version,options",
+            ])
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
 
         for line in out.lines() {
             let cols: Vec<&str> = line.splitn(4, '\t').collect();
-            if cols.len() < 3 { continue; }
+            if cols.len() < 3 {
+                continue;
+            }
             let app_id = cols[0].trim().to_string();
-            if app_id.is_empty() { continue; }
+            if app_id.is_empty() {
+                continue;
+            }
             let version = cols[2].trim().to_string();
             let options = cols.get(3).unwrap_or(&"").to_lowercase();
             let runtime = options.contains("runtime");
@@ -269,7 +298,8 @@ pub fn get_all_updates() -> Vec<FlatpakUpdate> {
 
             // Look up via flatpak-filtered map so the flatpak icon is always used,
             // even for apps that also have a native RPM in the AppStream cache.
-            let (icon_path, icon_url) = flatpak_meta.get(&app_id)
+            let (icon_path, icon_url) = flatpak_meta
+                .get(&app_id)
                 .map(|a| (a.icon_path.clone(), a.icon_url.clone()))
                 .unwrap_or_default();
 
@@ -312,8 +342,14 @@ pub fn get_updates() -> Vec<FlatpakApp> {
             }
             Some(FlatpakApp {
                 id: parts[0].trim().to_string(),
-                name: parts.get(1).map(|s| s.trim().to_string()).unwrap_or_default(),
-                version: parts.get(2).map(|s| s.trim().to_string()).unwrap_or_default(),
+                name: parts
+                    .get(1)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default(),
+                version: parts
+                    .get(2)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_default(),
                 source: "flatpak".to_string(),
                 installed: true,
                 origin: String::new(),
@@ -338,11 +374,19 @@ pub fn get_updates() -> Vec<FlatpakApp> {
 
 /// Install a Flatpak. Streams output lines, last line is "__done__<code>".
 pub fn install_stream(app_id: &str, remote: &str, system: bool) -> impl Iterator<Item = String> {
-    let r = if remote.is_empty() { "flathub".to_string() } else { remote.to_string() };
+    let r = if remote.is_empty() {
+        "flathub".to_string()
+    } else {
+        remote.to_string()
+    };
     let scope = if system { "--system" } else { "--user" };
     let args: Vec<String> = vec![
-        "install".into(), scope.into(), "--noninteractive".into(),
-        "-y".into(), r, app_id.to_string(),
+        "install".into(),
+        scope.into(),
+        "--noninteractive".into(),
+        "-y".into(),
+        r,
+        app_id.to_string(),
     ];
     run_flatpak_stream_owned(args)
 }
@@ -350,14 +394,27 @@ pub fn install_stream(app_id: &str, remote: &str, system: bool) -> impl Iterator
 /// Uninstall a Flatpak. Streams output lines.
 pub fn uninstall_stream(app_id: &str, system: bool) -> impl Iterator<Item = String> {
     let scope = if system { "--system" } else { "--user" };
-    let args: Vec<String> = vec!["uninstall".into(), scope.into(), "--noninteractive".into(), "-y".into(), app_id.to_string()];
+    let args: Vec<String> = vec![
+        "uninstall".into(),
+        scope.into(),
+        "--noninteractive".into(),
+        "-y".into(),
+        app_id.to_string(),
+    ];
     run_flatpak_stream_owned(args)
 }
 
 /// Uninstall a Flatpak with --force-remove (for runtimes/add-ons with dependents).
 pub fn force_uninstall_stream(app_id: &str, system: bool) -> impl Iterator<Item = String> {
     let scope = if system { "--system" } else { "--user" };
-    let args: Vec<String> = vec!["uninstall".into(), scope.into(), "--noninteractive".into(), "-y".into(), "--force-remove".into(), app_id.to_string()];
+    let args: Vec<String> = vec![
+        "uninstall".into(),
+        scope.into(),
+        "--noninteractive".into(),
+        "-y".into(),
+        "--force-remove".into(),
+        app_id.to_string(),
+    ];
     run_flatpak_stream_owned(args)
 }
 
@@ -376,7 +433,12 @@ pub fn update_stream() -> impl Iterator<Item = String> {
 }
 
 /// Update a single Flatpak app. Streams output lines.
-pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<Item = String> {    let scope = if installation == "user" { "--user" } else { "--system" };
+pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<Item = String> {
+    let scope = if installation == "user" {
+        "--user"
+    } else {
+        "--system"
+    };
     let owned: Vec<String> = ["update", scope, "--app", "--noninteractive", "-y", app_id]
         .iter()
         .map(|s| s.to_string())
@@ -388,12 +450,27 @@ pub fn update_single_stream(app_id: &str, installation: &str) -> impl Iterator<I
 /// User-scoped unused refs are pruned first, then system-wide via pkexec.
 pub fn clean_unused_stream() -> impl Iterator<Item = String> {
     let user = run_flatpak_stream(&["uninstall", "--unused", "-y", "--noninteractive", "--user"]);
-    let system = run_pkexec_flatpak_stream(&["uninstall", "--unused", "-y", "--noninteractive", "--system"]);
+    let system = run_pkexec_flatpak_stream(&[
+        "uninstall",
+        "--unused",
+        "-y",
+        "--noninteractive",
+        "--system",
+    ]);
     user.chain(system)
 }
 
 /// Update an already-installed Flatpak runtime branch (patch update).
-pub fn update_runtime_stream(app_id: &str, branch: &str, installation: &str) -> impl Iterator<Item = String> {    let scope = if installation == "user" { "--user" } else { "--system" };
+pub fn update_runtime_stream(
+    app_id: &str,
+    branch: &str,
+    installation: &str,
+) -> impl Iterator<Item = String> {
+    let scope = if installation == "user" {
+        "--user"
+    } else {
+        "--system"
+    };
     let ref_spec = format!("{}//{}", app_id, branch);
     let owned: Vec<String> = ["update", scope, "--noninteractive", "-y", &ref_spec]
         .iter()
@@ -460,13 +537,20 @@ pub fn get_remotes() -> Vec<FlatpakRemote> {
                 continue;
             }
             seen.insert((*scope, name.clone()));
-            let title   = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
-            let url     = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
-            let options = parts.get(3).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            let title = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
+            let url = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
+            let options = parts
+                .get(3)
+                .map(|s| s.trim().to_lowercase())
+                .unwrap_or_default();
             let enabled = !options.contains("disabled");
             remotes.push(FlatpakRemote {
                 name,
-                title: if title.is_empty() { parts[0].trim().to_string() } else { title },
+                title: if title.is_empty() {
+                    parts[0].trim().to_string()
+                } else {
+                    title
+                },
                 url,
                 enabled,
                 system: *scope == "system",
@@ -481,14 +565,21 @@ pub fn get_remotes() -> Vec<FlatpakRemote> {
             .output()
         {
             for line in String::from_utf8_lossy(&out.stdout).lines() {
-                if line.trim().is_empty() || line.starts_with("Name") { continue; }
+                if line.trim().is_empty() || line.starts_with("Name") {
+                    continue;
+                }
                 let parts: Vec<&str> = line.split('\t').collect();
                 let name = parts[0].trim().to_string();
-                if name.is_empty() || seen.contains(&("system", name.clone())) { continue; }
+                if name.is_empty() || seen.contains(&("system", name.clone())) {
+                    continue;
+                }
                 seen.insert(("system", name.clone()));
-                let title   = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
-                let url     = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
-                let options = parts.get(3).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                let title = parts.get(1).map(|s| s.trim()).unwrap_or("").to_string();
+                let url = parts.get(2).map(|s| s.trim()).unwrap_or("").to_string();
+                let options = parts
+                    .get(3)
+                    .map(|s| s.trim().to_lowercase())
+                    .unwrap_or_default();
                 remotes.push(FlatpakRemote {
                     name,
                     title,
@@ -514,7 +605,8 @@ pub fn has_flathub() -> bool {
 pub fn has_flathub_scoped(system: bool) -> bool {
     get_remotes().iter().any(|r| {
         r.system == system
-            && (r.name.to_lowercase().contains("flathub") || r.url.to_lowercase().contains("flathub"))
+            && (r.name.to_lowercase().contains("flathub")
+                || r.url.to_lowercase().contains("flathub"))
     })
 }
 
@@ -528,7 +620,8 @@ pub fn has_cosmic_welcome() -> bool {
 pub fn has_cosmic_remote_scoped(system: bool) -> bool {
     get_remotes().iter().any(|r| {
         r.system == system
-            && (r.name.to_lowercase().contains("cosmic") || r.url.to_lowercase().contains("apt.pop-os.org/cosmic"))
+            && (r.name.to_lowercase().contains("cosmic")
+                || r.url.to_lowercase().contains("apt.pop-os.org/cosmic"))
     })
 }
 
@@ -577,7 +670,11 @@ fn update_appstream(name: &str, system: bool) {
             .output()
     };
     if let Err(e) = result {
-        log::warn!("Failed to fetch AppStream data for remote '{}': {}", name, e);
+        log::warn!(
+            "Failed to fetch AppStream data for remote '{}': {}",
+            name,
+            e
+        );
     }
 }
 
@@ -626,7 +723,11 @@ pub fn set_remote_enabled(name: &str, enabled: bool, system: bool) -> (bool, Str
             scenter_appstream::reload_appstream();
             (
                 true,
-                format!("Remote '{}' {}.", name, if enabled { "enabled" } else { "disabled" }),
+                format!(
+                    "Remote '{}' {}.",
+                    name,
+                    if enabled { "enabled" } else { "disabled" }
+                ),
             )
         }
         Ok(o) => (false, String::from_utf8_lossy(&o.stderr).trim().to_string()),
@@ -649,12 +750,20 @@ pub fn get_local_flatpak_info(path: &str) -> serde_json::Value {
                 data.insert(k.trim().to_lowercase(), v.trim().to_string());
             }
         }
-        let app_id  = data.get("id").cloned().unwrap_or_else(|| basename_no_ext(path));
-        let name    = data.get("name").cloned()
+        let app_id = data
+            .get("id")
+            .cloned()
+            .unwrap_or_else(|| basename_no_ext(path));
+        let name = data
+            .get("name")
+            .cloned()
             .unwrap_or_else(|| app_id.split('.').next_back().unwrap_or(&app_id).to_string());
         let version = data.get("version").cloned().unwrap_or_default();
         let summary = data.get("subject").cloned().unwrap_or_default();
-        let branch  = data.get("branch").cloned().unwrap_or_else(|| "stable".to_string());
+        let branch = data
+            .get("branch")
+            .cloned()
+            .unwrap_or_else(|| "stable".to_string());
         let (icon_path, icon_url) = local_flatpak_icon(&app_id);
 
         return serde_json::json!({
@@ -703,15 +812,20 @@ pub fn get_flatpakref_info(path: &str) -> serde_json::Value {
             in_section = true;
             continue;
         }
-        if line.starts_with('[') { in_section = false; continue; }
-        if !in_section { continue; }
+        if line.starts_with('[') {
+            in_section = false;
+            continue;
+        }
+        if !in_section {
+            continue;
+        }
         if let Some((k, v)) = line.split_once('=') {
             match k.trim() {
-                "Name"    => app_id = v.trim().to_string(),
-                "Title"   => title = v.trim().to_string(),
+                "Name" => app_id = v.trim().to_string(),
+                "Title" => title = v.trim().to_string(),
                 "Comment" => comment = v.trim().to_string(),
-                "Url"     => url = v.trim().to_string(),
-                "Branch"  => branch = v.trim().to_string(),
+                "Url" => url = v.trim().to_string(),
+                "Branch" => branch = v.trim().to_string(),
                 _ => {}
             }
         }
@@ -741,7 +855,11 @@ fn local_flatpak_icon(app_id: &str) -> (String, String) {
     appstream
         .get(&format!("flatpak:{app_id}"))
         .or_else(|| appstream.get(app_id).filter(|app| app.source == "flatpak"))
-        .or_else(|| appstream.values().find(|app| app.source == "flatpak" && app.id == app_id))
+        .or_else(|| {
+            appstream
+                .values()
+                .find(|app| app.source == "flatpak" && app.id == app_id)
+        })
         .map(|app| (app.icon_path.clone(), app.icon_url.clone()))
         .unwrap_or_default()
 }
@@ -776,8 +894,11 @@ fn spawn_stream(bin: &str, args: Vec<String>) -> impl Iterator<Item = String> {
         let mut slave_raw: libc::c_int = -1;
         let pty_ok = unsafe {
             libc::openpty(
-                &mut master_raw, &mut slave_raw,
-                std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(),
+                &mut master_raw,
+                &mut slave_raw,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
             ) == 0
         };
 
@@ -794,7 +915,10 @@ fn spawn_stream(bin: &str, args: Vec<String>) -> impl Iterator<Item = String> {
                         .stdin(Stdio::from_raw_fd(slave_raw))
                         .stdout(Stdio::from_raw_fd(slave_out))
                         .stderr(Stdio::from_raw_fd(slave_err))
-                        .pre_exec(|| { libc::setsid(); Ok(()) });
+                        .pre_exec(|| {
+                            libc::setsid();
+                            Ok(())
+                        });
                 }
                 let spawn_result = builder.spawn();
                 // Drop builder immediately: this closes the Stdio-owned slave fds
@@ -812,7 +936,9 @@ fn spawn_stream(bin: &str, args: Vec<String>) -> impl Iterator<Item = String> {
                         return;
                     }
                     Err(e) => {
-                        unsafe { libc::close(master_raw); }
+                        unsafe {
+                            libc::close(master_raw);
+                        }
                         let _ = tx.send(format!("Error: {e}"));
                         let _ = tx.send("__done__1".to_string());
                         return;
@@ -820,8 +946,12 @@ fn spawn_stream(bin: &str, args: Vec<String>) -> impl Iterator<Item = String> {
                 }
             } else {
                 unsafe {
-                    if slave_out >= 0 { libc::close(slave_out); }
-                    if slave_err >= 0 { libc::close(slave_err); }
+                    if slave_out >= 0 {
+                        libc::close(slave_out);
+                    }
+                    if slave_err >= 0 {
+                        libc::close(slave_err);
+                    }
                     libc::close(slave_raw);
                     libc::close(master_raw);
                 }
@@ -899,7 +1029,9 @@ fn flush_lines(pending: &mut String, tx: &std::sync::mpsc::Sender<String>) {
     for (i, b) in pending.bytes().enumerate() {
         if b == b'\n' || b == b'\r' {
             let seg = pending[start..i].trim();
-            if !seg.is_empty() { let _ = tx.send(seg.to_string()); }
+            if !seg.is_empty() {
+                let _ = tx.send(seg.to_string());
+            }
             start = i + 1;
         }
     }
@@ -908,7 +1040,9 @@ fn flush_lines(pending: &mut String, tx: &std::sync::mpsc::Sender<String>) {
 
 fn flush_tail(pending: &str, tx: &std::sync::mpsc::Sender<String>) {
     let seg = pending.trim();
-    if !seg.is_empty() { let _ = tx.send(seg.to_string()); }
+    if !seg.is_empty() {
+        let _ = tx.send(seg.to_string());
+    }
 }
 
 fn strip_ansi(input: &[u8]) -> Vec<u8> {
@@ -917,13 +1051,43 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
     while i < input.len() {
         if input[i] == b'\x1b' {
             i += 1;
-            if i >= input.len() { break; }
-            match input[i] {
-                b'[' => { i += 1; while i < input.len() && !input[i].is_ascii_alphabetic() { i += 1; } if i < input.len() { i += 1; } }
-                b']' => { i += 1; while i < input.len() { if input[i] == b'\x07' { i += 1; break; } else if input[i] == b'\x1b' && i+1 < input.len() && input[i+1] == b'\\' { i += 2; break; } i += 1; } }
-                _ => { i += 1; }
+            if i >= input.len() {
+                break;
             }
-        } else { out.push(input[i]); i += 1; }
+            match input[i] {
+                b'[' => {
+                    i += 1;
+                    while i < input.len() && !input[i].is_ascii_alphabetic() {
+                        i += 1;
+                    }
+                    if i < input.len() {
+                        i += 1;
+                    }
+                }
+                b']' => {
+                    i += 1;
+                    while i < input.len() {
+                        if input[i] == b'\x07' {
+                            i += 1;
+                            break;
+                        } else if input[i] == b'\x1b'
+                            && i + 1 < input.len()
+                            && input[i + 1] == b'\\'
+                        {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                _ => {
+                    i += 1;
+                }
+            }
+        } else {
+            out.push(input[i]);
+            i += 1;
+        }
     }
     out
 }

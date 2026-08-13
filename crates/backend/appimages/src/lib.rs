@@ -14,10 +14,18 @@ fn home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/root".to_string()))
 }
 
-fn install_dir() -> PathBuf { home().join(".local/share/software-center/appimages") }
-fn icon_dir()    -> PathBuf { home().join(".local/share/software-center/appimages/icons") }
-fn desktop_dir() -> PathBuf { home().join(".local/share/applications") }
-fn preview_icon_dir() -> PathBuf { home().join(".cache/software-center/local-icons") }
+fn install_dir() -> PathBuf {
+    home().join(".local/share/software-center/appimages")
+}
+fn icon_dir() -> PathBuf {
+    home().join(".local/share/software-center/appimages/icons")
+}
+fn desktop_dir() -> PathBuf {
+    home().join(".local/share/applications")
+}
+fn preview_icon_dir() -> PathBuf {
+    home().join(".cache/software-center/local-icons")
+}
 fn extract_tmp() -> PathBuf {
     std::env::temp_dir().join("sc-appimage-extract")
 }
@@ -80,9 +88,19 @@ pub struct AppImageInfo {
 // ── Archive detection ─────────────────────────────────────────────────────────
 
 const ARCHIVE_SUFFIXES: &[&str] = &[
-    ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz",
-    ".tar.zst", ".tzst", ".tar.lz", ".tar.lzma",
-    ".zip", ".7z", ".tar",
+    ".tar.gz",
+    ".tgz",
+    ".tar.bz2",
+    ".tbz2",
+    ".tar.xz",
+    ".txz",
+    ".tar.zst",
+    ".tzst",
+    ".tar.lz",
+    ".tar.lzma",
+    ".zip",
+    ".7z",
+    ".tar",
 ];
 
 pub fn is_archive(path: &str) -> bool {
@@ -93,7 +111,8 @@ pub fn is_archive(path: &str) -> bool {
 /// Extract an archive and return path to the AppImage inside.
 /// Caller must clean up the returned file's parent temp dir when done.
 fn find_appimage_in_archive(archive_path: &std::path::Path) -> Result<PathBuf> {
-    let stem = archive_path.file_stem()
+    let stem = archive_path
+        .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("arc");
     let tmp_dir = extract_tmp().join(format!("arc-{}", stem));
@@ -102,21 +121,31 @@ fn find_appimage_in_archive(archive_path: &std::path::Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(&tmp_dir)?;
 
-    let name = archive_path.file_name()
+    let name = archive_path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("")
         .to_lowercase();
 
     if name.ends_with(".zip") {
         let status = Command::new("unzip")
-            .args(["-q", &archive_path.to_string_lossy(), "-d", &tmp_dir.to_string_lossy()])
+            .args([
+                "-q",
+                &archive_path.to_string_lossy(),
+                "-d",
+                &tmp_dir.to_string_lossy(),
+            ])
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("unzip failed"));
         }
     } else if name.ends_with(".7z") {
         let status = Command::new("7z")
-            .args(["x", &archive_path.to_string_lossy(), &format!("-o{}", tmp_dir.display())])
+            .args([
+                "x",
+                &archive_path.to_string_lossy(),
+                &format!("-o{}", tmp_dir.display()),
+            ])
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("7z failed"));
@@ -124,7 +153,12 @@ fn find_appimage_in_archive(archive_path: &std::path::Path) -> Result<PathBuf> {
     } else {
         // tar handles .tar.gz, .tgz, .tar.bz2, .tar.xz, .tar.zst, .tar etc.
         let status = Command::new("tar")
-            .args(["xf", &archive_path.to_string_lossy(), "-C", &tmp_dir.to_string_lossy()])
+            .args([
+                "xf",
+                &archive_path.to_string_lossy(),
+                "-C",
+                &tmp_dir.to_string_lossy(),
+            ])
             .status()?;
         if !status.success() {
             return Err(anyhow::anyhow!("tar failed"));
@@ -134,9 +168,13 @@ fn find_appimage_in_archive(archive_path: &std::path::Path) -> Result<PathBuf> {
     // Find AppImage files — pick the largest
     let found = find_appimages_in_dir(&tmp_dir);
     if found.is_empty() {
-        return Err(anyhow::anyhow!("No AppImage found inside {}", archive_path.display()));
+        return Err(anyhow::anyhow!(
+            "No AppImage found inside {}",
+            archive_path.display()
+        ));
     }
-    let best = found.into_iter()
+    let best = found
+        .into_iter()
         .max_by_key(|p| p.metadata().map(|m| m.len()).unwrap_or(0))
         .unwrap();
     Ok(best)
@@ -146,7 +184,8 @@ fn find_appimages_in_dir(dir: &std::path::Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     if let Ok(entries) = walkdir(dir) {
         for path in entries {
-            let name = path.file_name()
+            let name = path
+                .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or("")
                 .to_lowercase();
@@ -185,7 +224,10 @@ pub fn extract_appimage_info(path: &str) -> AppImageInfo {
         return AppImageInfo::default();
     }
 
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("appimage");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("appimage");
     let extract_dir = extract_tmp().join(stem);
 
     // Clean previous extraction
@@ -211,7 +253,11 @@ pub fn extract_appimage_info(path: &str) -> AppImageInfo {
         .status();
 
     let squashfs = extract_dir.join("squashfs-root");
-    let root = if squashfs.exists() { squashfs } else { extract_dir.clone() };
+    let root = if squashfs.exists() {
+        squashfs
+    } else {
+        extract_dir.clone()
+    };
 
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let info = match result {
@@ -235,7 +281,8 @@ fn parse_extracted(squashfs: &std::path::Path, filename: &str) -> AppImageInfo {
     };
 
     // Find .desktop file
-    let mut desktop_files: Vec<PathBuf> = squashfs.read_dir()
+    let mut desktop_files: Vec<PathBuf> = squashfs
+        .read_dir()
         .into_iter()
         .flatten()
         .flatten()
@@ -252,14 +299,23 @@ fn parse_extracted(squashfs: &std::path::Path, filename: &str) -> AppImageInfo {
         desktop_data = parse_desktop_file(dfile);
     }
 
-    let stem = std::path::Path::new(filename).file_stem()
-        .and_then(|s| s.to_str()).unwrap_or(filename);
-    info.name = desktop_data.get("Name").cloned().unwrap_or_else(|| stem.to_string());
+    let stem = std::path::Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(filename);
+    info.name = desktop_data
+        .get("Name")
+        .cloned()
+        .unwrap_or_else(|| stem.to_string());
     info.summary = desktop_data.get("Comment").cloned().unwrap_or_default();
     info.description = info.summary.clone();
-    info.version = desktop_data.get("X-AppImage-Version").cloned().unwrap_or_default();
+    info.version = desktop_data
+        .get("X-AppImage-Version")
+        .cloned()
+        .unwrap_or_default();
     let cats_str = desktop_data.get("Categories").cloned().unwrap_or_default();
-    info.categories = cats_str.split(';')
+    info.categories = cats_str
+        .split(';')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
@@ -283,7 +339,9 @@ fn parse_extracted(squashfs: &std::path::Path, filename: &str) -> AppImageInfo {
 
 fn parse_desktop_file(path: &std::path::Path) -> std::collections::HashMap<String, String> {
     let mut result = std::collections::HashMap::new();
-    let Ok(text) = std::fs::read_to_string(path) else { return result };
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return result;
+    };
     let mut in_entry = false;
     for line in text.lines() {
         let line = line.trim();
@@ -340,8 +398,11 @@ fn find_icon(squashfs: &std::path::Path, icon_name: &str) -> (Option<Vec<u8>>, S
 
     // Fallback: any png in root
     if candidates.is_empty() {
-        candidates = squashfs.read_dir()
-            .into_iter().flatten().flatten()
+        candidates = squashfs
+            .read_dir()
+            .into_iter()
+            .flatten()
+            .flatten()
             .map(|e| e.path())
             .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("png"))
             .take(1)
@@ -350,7 +411,8 @@ fn find_icon(squashfs: &std::path::Path, icon_name: &str) -> (Option<Vec<u8>>, S
 
     for candidate in &candidates {
         if let Ok(data) = std::fs::read(candidate) {
-            let fallback_ext = candidate.extension()
+            let fallback_ext = candidate
+                .extension()
                 .and_then(|e| e.to_str())
                 .unwrap_or("png")
                 .to_string();
@@ -432,19 +494,19 @@ fn parse_update_info(update_info: &str) -> (String, String, String) {
         if parts.len() >= 4 {
             let owner = parts[1];
             let repo = parts[2];
-            let pattern = parts.get(4)
+            let pattern = parts
+                .get(4)
                 .map(|p| p.replace(".zsync", ""))
                 .unwrap_or_else(|| "*.AppImage".to_string());
-            let url = GITHUB_API
-                .replace("{owner}", owner)
-                .replace("{repo}", repo);
+            let url = GITHUB_API.replace("{owner}", owner).replace("{repo}", repo);
             return ("github".to_string(), url, pattern);
         }
     } else if parts[0].starts_with("gl-releases") {
         // gl-releases-zsync|namespace/repo|tag|pattern
         if parts.len() >= 3 {
             let project = urlencoded(parts[1]);
-            let pattern = parts.get(3)
+            let pattern = parts
+                .get(3)
                 .map(|p| p.replace(".zsync", ""))
                 .unwrap_or_else(|| "*.AppImage".to_string());
             let url = GITLAB_API.replace("{project}", &project);
@@ -453,7 +515,8 @@ fn parse_update_info(update_info: &str) -> (String, String, String) {
     } else if parts[0] == "zsync" && parts.len() >= 2 {
         let url = parts[1].replace(".zsync", "");
         let pattern = std::path::Path::new(parts[1])
-            .file_name().and_then(|n| n.to_str())
+            .file_name()
+            .and_then(|n| n.to_str())
             .unwrap_or("*.AppImage")
             .replace(".zsync", "");
         return ("url".to_string(), url, pattern);
@@ -462,10 +525,12 @@ fn parse_update_info(update_info: &str) -> (String, String, String) {
 }
 
 fn urlencoded(s: &str) -> String {
-    s.chars().map(|c| match c {
-        '/' => "%2F".to_string(),
-        _ => c.to_string(),
-    }).collect()
+    s.chars()
+        .map(|c| match c {
+            '/' => "%2F".to_string(),
+            _ => c.to_string(),
+        })
+        .collect()
 }
 
 // ── Install / Uninstall ───────────────────────────────────────────────────────
@@ -476,7 +541,9 @@ pub fn get_installed() -> Vec<AppImage> {
     if !dir.exists() {
         return Vec::new();
     }
-    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
     let mut apps: Vec<AppImage> = entries
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
@@ -485,7 +552,11 @@ pub fn get_installed() -> Vec<AppImage> {
                 .ok()
                 .and_then(|s| serde_json::from_str::<AppImage>(&s).ok())
         })
-        .map(|mut a| { a.installed = true; a.source = "appimage".to_string(); a })
+        .map(|mut a| {
+            a.installed = true;
+            a.source = "appimage".to_string();
+            a
+        })
         .collect();
     apps.sort_by(|a, b| a.name.cmp(&b.name));
     apps
@@ -513,7 +584,13 @@ pub fn install_appimage(src_path: &str) -> (bool, String, Option<AppImage>) {
                 arc_tmp = Some(extracted.parent().unwrap().to_path_buf());
                 actual_src = extracted;
             }
-            Err(e) => return (false, format!("Could not extract AppImage from archive: {}", e), None),
+            Err(e) => {
+                return (
+                    false,
+                    format!("Could not extract AppImage from archive: {}", e),
+                    None,
+                )
+            }
         }
     } else {
         arc_tmp = None;
@@ -540,7 +617,10 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
 
     let info = extract_appimage_info(&src.to_string_lossy());
     let name = if info.name.is_empty() {
-        src.file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
+        src.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app")
+            .to_string()
     } else {
         info.name.clone()
     };
@@ -564,7 +644,11 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
 
     // Save icon
     let icon_path_str = if let Some(icon_data) = &info.icon_data {
-        let ext = if info.icon_ext.is_empty() { "png" } else { &info.icon_ext };
+        let ext = if info.icon_ext.is_empty() {
+            "png"
+        } else {
+            &info.icon_ext
+        };
         let icon_path = icon_dir().join(format!("{}.{}", app_id, ext));
         if std::fs::write(&icon_path, icon_data).is_ok() {
             icon_path.to_string_lossy().to_string()
@@ -576,7 +660,13 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
     };
 
     // Write .desktop file
-    let desktop_path = write_desktop(&app_id, &name, &dest_path.to_string_lossy(), &icon_path_str, &info);
+    let desktop_path = write_desktop(
+        &app_id,
+        &name,
+        &dest_path.to_string_lossy(),
+        &icon_path_str,
+        &info,
+    );
 
     // Write sidecar JSON
     let now = chrono_now();
@@ -587,11 +677,21 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         .ok()
         .and_then(|c| serde_json::from_str(&c).ok());
     let or_meta = |prev_val: &str, meta_val: &str| -> String {
-        if prev_val.is_empty() { meta_val.to_string() } else { prev_val.to_string() }
+        if prev_val.is_empty() {
+            meta_val.to_string()
+        } else {
+            prev_val.to_string()
+        }
     };
-    let prev_source = prev.as_ref().map(|p| p.update_source.as_str()).unwrap_or("");
+    let prev_source = prev
+        .as_ref()
+        .map(|p| p.update_source.as_str())
+        .unwrap_or("");
     let prev_url = prev.as_ref().map(|p| p.update_url.as_str()).unwrap_or("");
-    let prev_pattern = prev.as_ref().map(|p| p.update_pattern.as_str()).unwrap_or("");
+    let prev_pattern = prev
+        .as_ref()
+        .map(|p| p.update_pattern.as_str())
+        .unwrap_or("");
 
     let app = AppImage {
         id: app_id.clone(),
@@ -618,7 +718,9 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         let _ = std::fs::write(&sidecar_path, json);
     }
 
-    let _ = Command::new("update-desktop-database").arg(desktop_dir()).output();
+    let _ = Command::new("update-desktop-database")
+        .arg(desktop_dir())
+        .output();
 
     (true, format!("{} installed successfully.", name), Some(app))
 }
@@ -652,7 +754,9 @@ pub fn uninstall(id: &str) -> (bool, String) {
     let desktop = desktop_dir().join(format!("{}{}.desktop", DESKTOP_PREFIX, id));
     let _ = std::fs::remove_file(&desktop);
     let _ = std::fs::remove_file(&sidecar_path);
-    let _ = Command::new("update-desktop-database").arg(desktop_dir()).output();
+    let _ = Command::new("update-desktop-database")
+        .arg(desktop_dir())
+        .output();
 
     (true, format!("{} uninstalled.", app.name))
 }
@@ -663,10 +767,8 @@ pub fn uninstall(id: &str) -> (bool, String) {
 pub fn cleanup_orphans() -> (usize, String) {
     let install = install_dir();
     let apps = get_installed();
-    let referenced: std::collections::HashSet<String> = apps
-        .iter()
-        .map(|a| a.installed_path.clone())
-        .collect();
+    let referenced: std::collections::HashSet<String> =
+        apps.iter().map(|a| a.installed_path.clone()).collect();
 
     let mut removed = 0usize;
     let Ok(entries) = std::fs::read_dir(&install) else {
@@ -682,13 +784,18 @@ pub fn cleanup_orphans() -> (usize, String) {
         let is_binary = fname.ends_with(".AppImage") || fname.ends_with(".appimage");
         let is_json = fname.ends_with(".json");
         if (is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())))
-            && std::fs::remove_file(&path).is_ok() {
-                removed += 1;
-            }
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
         if is_json {
-            let Ok(content) = std::fs::read_to_string(&path) else { continue };
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
             if let Ok(app) = serde_json::from_str::<AppImage>(&content) {
-                if !app.installed_path.is_empty() && !std::path::Path::new(&app.installed_path).exists() {
+                if !app.installed_path.is_empty()
+                    && !std::path::Path::new(&app.installed_path).exists()
+                {
                     let _ = std::fs::remove_file(&path);
                     removed += 1;
                 }
@@ -696,7 +803,9 @@ pub fn cleanup_orphans() -> (usize, String) {
         }
     }
 
-    let _ = Command::new("update-desktop-database").arg(desktop_dir()).output();
+    let _ = Command::new("update-desktop-database")
+        .arg(desktop_dir())
+        .output();
     (
         removed,
         if removed > 0 {
@@ -722,26 +831,36 @@ pub fn save_settings(
     let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
         return (false, "Failed to read sidecar.".to_string());
     };
-    app.update_source    = update_source.to_string();
-    app.update_url       = update_url.to_string();
-    app.update_pattern   = update_pattern.to_string();
+    app.update_source = update_source.to_string();
+    app.update_url = update_url.to_string();
+    app.update_pattern = update_pattern.to_string();
     app.allow_prerelease = allow_prerelease;
     match serde_json::to_string_pretty(&app) {
         Ok(json) => match std::fs::write(&sidecar_path, json) {
-            Ok(_)  => (true,  "Settings saved.".to_string()),
+            Ok(_) => (true, "Settings saved.".to_string()),
             Err(e) => (false, format!("Write error: {}", e)),
         },
         Err(e) => (false, format!("Serialize error: {}", e)),
     }
 }
 
-fn write_desktop(app_id: &str, name: &str, exec_path: &str, icon_path: &str, info: &AppImageInfo) -> String {
+fn write_desktop(
+    app_id: &str,
+    name: &str,
+    exec_path: &str,
+    icon_path: &str,
+    info: &AppImageInfo,
+) -> String {
     let cats = if info.categories.is_empty() {
         "Utility;".to_string()
     } else {
         info.categories.join(";") + ";"
     };
-    let icon = if icon_path.is_empty() { "application-x-executable" } else { icon_path };
+    let icon = if icon_path.is_empty() {
+        "application-x-executable"
+    } else {
+        icon_path
+    };
     let content = format!(
         "[Desktop Entry]\nName={}\nComment={}\nExec=\"{}\" %U\nIcon={}\nTerminal=false\nType=Application\nCategories={}\nStartupNotify=true\nX-SoftwareCenter-AppImage=true\nX-SoftwareCenter-AppImage-ID={}\n",
         name, info.summary, exec_path, icon, cats, app_id
@@ -788,7 +907,11 @@ pub fn get_appimage_info_for_display(path: &str) -> serde_json::Value {
 
     let info = extract_appimage_info(&actual.to_string_lossy());
     let name = if info.name.is_empty() {
-        actual.file_stem().and_then(|s| s.to_str()).unwrap_or("app").to_string()
+        actual
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("app")
+            .to_string()
     } else {
         info.name.clone()
     };
@@ -869,12 +992,12 @@ pub async fn check_update(app: &AppImage) -> Option<UpdateResult> {
 
 async fn check_single_update(app: &AppImage) -> Option<UpdateResult> {
     match app.update_source.as_str() {
-        "github"   => check_github_update(app).await,
-        "gitlab"   => check_gitlab_update(app).await,
+        "github" => check_github_update(app).await,
+        "gitlab" => check_gitlab_update(app).await,
         "codeberg" => check_gitea_update(app).await,
-        "forgejo"  => check_gitea_update(app).await,
-        "url"      => check_url_update(app).await,
-        _          => None,
+        "forgejo" => check_gitea_update(app).await,
+        "url" => check_url_update(app).await,
+        _ => None,
     }
 }
 
@@ -891,8 +1014,12 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
         .get(&api_url)
         .header("User-Agent", "Software-Center/1.0")
         .header("Accept", "application/vnd.github+json")
-        .send().await.ok()?
-        .json::<serde_json::Value>().await.ok()?;
+        .send()
+        .await
+        .ok()?
+        .json::<serde_json::Value>()
+        .await
+        .ok()?;
 
     let pattern = glob_to_regex(&app.update_pattern);
     let host = host_arch();
@@ -902,18 +1029,28 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
             if rel["draft"].as_bool().unwrap_or(false) {
                 continue;
             }
-            let new_version = rel["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+            let new_version = rel["tag_name"]
+                .as_str()
+                .unwrap_or("")
+                .trim_start_matches('v')
+                .to_string();
             if !version_newer(&new_version, &app.version) {
                 continue;
             }
-            if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
+            if let Some(asset) = rel["assets"]
+                .as_array()
+                .and_then(|assets| pick_asset(assets, &pattern, &host))
+            {
                 return Some(make_result(app, new_version, asset));
             }
         }
         return None;
     }
 
-    let new_version = resp["tag_name"].as_str()?.trim_start_matches('v').to_string();
+    let new_version = resp["tag_name"]
+        .as_str()?
+        .trim_start_matches('v')
+        .to_string();
     if !version_newer(&new_version, &app.version) {
         return None;
     }
@@ -927,8 +1064,12 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
     let resp = reqwest::Client::new()
         .get(&api_url)
         .header("User-Agent", "Software-Center/1.0")
-        .send().await.ok()?
-        .json::<serde_json::Value>().await.ok()?;
+        .send()
+        .await
+        .ok()?
+        .json::<serde_json::Value>()
+        .await
+        .ok()?;
 
     let pattern = glob_to_regex(&app.update_pattern);
     let host = host_arch();
@@ -942,11 +1083,18 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
         if rel["draft"].as_bool().unwrap_or(false) {
             continue;
         }
-        let new_version = rel["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
+        let new_version = rel["tag_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('v')
+            .to_string();
         if !version_newer(&new_version, &app.version) {
             continue;
         }
-        if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
+        if let Some(asset) = rel["assets"]
+            .as_array()
+            .and_then(|assets| pick_asset(assets, &pattern, &host))
+        {
             return Some(make_result(app, new_version, asset));
         }
     }
@@ -958,32 +1106,59 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
     let releases = reqwest::Client::new()
         .get(&api_url)
         .header("User-Agent", "Software-Center/1.0")
-        .send().await.ok()?
-        .json::<serde_json::Value>().await.ok()?;
+        .send()
+        .await
+        .ok()?
+        .json::<serde_json::Value>()
+        .await
+        .ok()?;
 
     let pattern = glob_to_regex(&app.update_pattern);
     let host = host_arch();
-    let latest = releases.as_array()?.iter()
+    let latest = releases
+        .as_array()?
+        .iter()
         .find(|rel| !rel["upcoming_release"].as_bool().unwrap_or(false))?;
-    let new_version = latest["tag_name"].as_str()?.trim_start_matches('v').to_string();
+    let new_version = latest["tag_name"]
+        .as_str()?
+        .trim_start_matches('v')
+        .to_string();
     if !version_newer(&new_version, &app.version) {
         return None;
     }
 
     let links = latest["assets"]["links"].as_array()?;
-    let asset = links.iter()
+    let asset = links
+        .iter()
         .filter(|a| {
-            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            let fname = a["url"]
+                .as_str()
+                .unwrap_or("")
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
             pattern.is_match(fname)
         })
         .find(|a| {
-            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
+            let fname = a["url"]
+                .as_str()
+                .unwrap_or("")
+                .rsplit('/')
+                .next()
+                .unwrap_or("");
             name_matches_arch(fname, &host)
         })
-        .or_else(|| links.iter().find(|a| {
-            let fname = a["url"].as_str().unwrap_or("").rsplit('/').next().unwrap_or("");
-            pattern.is_match(fname)
-        }))?;
+        .or_else(|| {
+            links.iter().find(|a| {
+                let fname = a["url"]
+                    .as_str()
+                    .unwrap_or("")
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or("");
+                pattern.is_match(fname)
+            })
+        })?;
 
     Some(UpdateResult {
         id: app.id.clone(),
@@ -997,15 +1172,22 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
 
 async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
     let client = reqwest::Client::new();
-    let resp = client.head(&app.update_url)
+    let resp = client
+        .head(&app.update_url)
         .header("User-Agent", "Software-Center/1.0")
-        .send().await.ok()?;
+        .send()
+        .await
+        .ok()?;
 
-    let etag = resp.headers().get("etag")
+    let etag = resp
+        .headers()
+        .get("etag")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    let last_mod = resp.headers().get("last-modified")
+    let last_mod = resp
+        .headers()
+        .get("last-modified")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
@@ -1018,22 +1200,26 @@ async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
         .unwrap_or_default();
 
     let stored_etag = sidecar["_url_etag"].as_str().unwrap_or("").to_string();
-    let stored_mod  = sidecar["_url_last_modified"].as_str().unwrap_or("").to_string();
+    let stored_mod = sidecar["_url_last_modified"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
 
     let has_update = (!etag.is_empty() && etag != stored_etag)
         || (!last_mod.is_empty() && last_mod != stored_mod);
 
     if has_update {
         // Update sidecar with new values
-        let mut updated: serde_json::Map<String, serde_json::Value> = sidecar
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        let mut updated: serde_json::Map<String, serde_json::Value> =
+            sidecar.as_object().cloned().unwrap_or_default();
         if !etag.is_empty() {
             updated.insert("_url_etag".to_string(), serde_json::Value::String(etag));
         }
         if !last_mod.is_empty() {
-            updated.insert("_url_last_modified".to_string(), serde_json::Value::String(last_mod));
+            updated.insert(
+                "_url_last_modified".to_string(),
+                serde_json::Value::String(last_mod),
+            );
         }
         if let Ok(json) = serde_json::to_string_pretty(&updated) {
             let _ = std::fs::write(&sidecar_path, json);
@@ -1092,7 +1278,9 @@ async fn try_zsync_delta(
     let client = reqwest::Client::new();
     let mut zsync_url = None;
     for cand in &zsync_candidates {
-        let Ok(head) = client.head(cand).send().await else { continue };
+        let Ok(head) = client.head(cand).send().await else {
+            continue;
+        };
         if !head.status().is_success() {
             continue;
         }
@@ -1206,26 +1394,35 @@ fn run_zsync_blocking(
     ok
 }
 
-
 /// Download and install an AppImage update. Yields status lines, last is "__done__<code>".
 /// `new_version_hint` is used when the updated binary carries no version metadata.
-pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint: &str) -> impl Iterator<Item = String> {
+pub fn update_appimage_stream(
+    app_id: &str,
+    download_url: &str,
+    new_version_hint: &str,
+) -> impl Iterator<Item = String> {
     let app_id = app_id.to_string();
     let download_url = download_url.to_string();
     let new_version_hint = new_version_hint.to_string();
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
-        return UpdateStreamIter::Immediate(vec![
-            format!("Error: {} not installed.", app_id),
-            "__done__1".to_string(),
-        ].into_iter());
+        return UpdateStreamIter::Immediate(
+            vec![
+                format!("Error: {} not installed.", app_id),
+                "__done__1".to_string(),
+            ]
+            .into_iter(),
+        );
     };
     let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
-        return UpdateStreamIter::Immediate(vec![
-            "Error: Failed to read sidecar.".to_string(),
-            "__done__1".to_string(),
-        ].into_iter());
+        return UpdateStreamIter::Immediate(
+            vec![
+                "Error: Failed to read sidecar.".to_string(),
+                "__done__1".to_string(),
+            ]
+            .into_iter(),
+        );
     };
 
     let name = app.name.clone();
@@ -1252,9 +1449,11 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
 
         if !zsync_ok {
             let client = reqwest::Client::new();
-            let resp = match client.get(&download_url)
+            let resp = match client
+                .get(&download_url)
                 .header("User-Agent", "Software-Center/1.0")
-                .send().await
+                .send()
+                .await
             {
                 Ok(r) => r,
                 Err(e) => {
@@ -1322,7 +1521,11 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
             let _ = tx.send("__done__1".to_string());
             return;
         }
-        let _ = tx.send(format!("Verified {} AppImage for {}.", machine_name_of(&tmp_path.to_string_lossy()), host));
+        let _ = tx.send(format!(
+            "Verified {} AppImage for {}.",
+            machine_name_of(&tmp_path.to_string_lossy()),
+            host
+        ));
 
         // Atomic replace with a backup so we can roll back on failure.
         let new_path = install_dir().join(format!("{}.AppImage", app_id));
@@ -1368,15 +1571,25 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
         let _ = tx.send("Extracting updated metadata...".to_string());
         let info = extract_appimage_info(&new_path.to_string_lossy());
         let new_version = if info.version.is_empty() {
-            if new_version_hint.is_empty() { app.version.clone() } else { new_version_hint.clone() }
-        } else { info.version.clone() };
+            if new_version_hint.is_empty() {
+                app.version.clone()
+            } else {
+                new_version_hint.clone()
+            }
+        } else {
+            info.version.clone()
+        };
 
         app.version = new_version.clone();
         app.installed_path = new_path.to_string_lossy().to_string();
         app.last_checked = chrono_now();
 
         if let Some(icon_data) = &info.icon_data {
-            let ext = if info.icon_ext.is_empty() { "png" } else { &info.icon_ext };
+            let ext = if info.icon_ext.is_empty() {
+                "png"
+            } else {
+                &info.icon_ext
+            };
             let icon_path = icon_dir().join(format!("{}.{}", app_id, ext));
             let _ = std::fs::write(&icon_path, icon_data);
         }
@@ -1424,9 +1637,17 @@ impl Iterator for UpdateStreamIter {
 // ── Internals ─────────────────────────────────────────────────────────────────
 
 fn sanitize_id(name: &str) -> String {
-    let id: String = name.to_lowercase().chars().map(|c| {
-        if c.is_ascii_alphanumeric() || c == '-' { c } else { '-' }
-    }).collect();
+    let id: String = name
+        .to_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
     id.trim_matches('-').to_string()
 }
 
@@ -1469,16 +1690,23 @@ fn normalize_gitea_url(url: &str, allow_prerelease: bool) -> String {
         .ok()
         .and_then(|re| re.captures(url))
     {
-        let host  = &caps[1];
+        let host = &caps[1];
         let owner = &caps[2];
-        let repo  = &caps[3];
-        let scheme = if url.starts_with("https://") { "https" } else { "http" };
+        let repo = &caps[3];
+        let scheme = if url.starts_with("https://") {
+            "https"
+        } else {
+            "http"
+        };
         let tail = if allow_prerelease {
             "releases?limit=10"
         } else {
             "releases/latest"
         };
-        return format!("{}://{}/api/v1/repos/{}/{}/{}", scheme, host, owner, repo, tail);
+        return format!(
+            "{}://{}/api/v1/repos/{}/{}/{}",
+            scheme, host, owner, repo, tail
+        );
     }
     url.to_string()
 }
@@ -1490,10 +1718,17 @@ fn pick_asset<'a>(
     pattern: &Regex,
     host: &str,
 ) -> Option<&'a serde_json::Value> {
-    let matching: Vec<&serde_json::Value> = assets.iter()
-        .filter(|a| a["name"].as_str().map(|n| pattern.is_match(n)).unwrap_or(false))
+    let matching: Vec<&serde_json::Value> = assets
+        .iter()
+        .filter(|a| {
+            a["name"]
+                .as_str()
+                .map(|n| pattern.is_match(n))
+                .unwrap_or(false)
+        })
         .collect();
-    matching.iter()
+    matching
+        .iter()
         .find(|a| name_matches_arch(a["name"].as_str().unwrap_or(""), host))
         .copied()
         .or_else(|| matching.first().copied())
@@ -1505,7 +1740,10 @@ fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -
         name: app.name.clone(),
         current_version: app.version.clone(),
         new_version,
-        download_url: asset["browser_download_url"].as_str().unwrap_or("").to_string(),
+        download_url: asset["browser_download_url"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
         icon_path: app.icon_path.clone(),
     }
 }
@@ -1513,13 +1751,17 @@ fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -
 /// True when a release-asset filename does not clearly target another arch.
 fn name_matches_arch(name: &str, host: &str) -> bool {
     let lower = name.to_lowercase();
-    let has_x86 = lower.contains("x86_64") || lower.contains("amd64")
-        || lower.contains("i686") || lower.contains("i386");
-    let has_arm = lower.contains("aarch64") || lower.contains("arm64")
-        || lower.contains("armhf") || lower.contains("armv7");
+    let has_x86 = lower.contains("x86_64")
+        || lower.contains("amd64")
+        || lower.contains("i686")
+        || lower.contains("i386");
+    let has_arm = lower.contains("aarch64")
+        || lower.contains("arm64")
+        || lower.contains("armhf")
+        || lower.contains("armv7");
     match host {
-        "x86_64" | "amd64"   => !(has_arm && !has_x86),
-        "aarch64" | "arm64"  => !(has_x86 && !has_arm),
+        "x86_64" | "amd64" => !(has_arm && !has_x86),
+        "aarch64" | "arm64" => !(has_x86 && !has_arm),
         _ => true,
     }
 }
@@ -1549,10 +1791,10 @@ fn elf_machine(path: &str) -> Result<u16> {
 
 fn machine_name_of(path: &str) -> &'static str {
     match elf_machine(path) {
-        Ok(3)   => "i386",
-        Ok(62)  => "x86_64",
+        Ok(3) => "i386",
+        Ok(62) => "x86_64",
         Ok(183) => "aarch64",
-        _       => "unknown-arch",
+        _ => "unknown-arch",
     }
 }
 
@@ -1561,7 +1803,7 @@ fn machine_name_of(path: &str) -> &'static str {
 fn check_elf_and_arch(path: &str, host: &str) -> Result<()> {
     let machine = elf_machine(path)?;
     let machine_ok = match host {
-        "x86_64" | "amd64"  => machine == 62,
+        "x86_64" | "amd64" => machine == 62,
         "aarch64" | "arm64" => machine == 183,
         _ => true,
     };
@@ -1588,11 +1830,20 @@ fn check_elf_and_arch(path: &str, host: &str) -> Result<()> {
 }
 
 fn version_newer(new: &str, current: &str) -> bool {
-    if current.is_empty() { return true; }
-    if new == current { return false; }
+    if current.is_empty() {
+        return true;
+    }
+    if new == current {
+        return false;
+    }
     let parse = |v: &str| -> Vec<u64> {
-        Regex::new(r"\d+").ok()
-            .map(|re| re.find_iter(v).filter_map(|m| m.as_str().parse().ok()).collect())
+        Regex::new(r"\d+")
+            .ok()
+            .map(|re| {
+                re.find_iter(v)
+                    .filter_map(|m| m.as_str().parse().ok())
+                    .collect()
+            })
             .unwrap_or_default()
     };
     parse(new) > parse(current)
@@ -1600,35 +1851,66 @@ fn version_newer(new: &str, current: &str) -> bool {
 
 fn glob_to_regex(pattern: &str) -> Regex {
     let escaped = regex::escape(pattern).replace(r"\*", ".*");
-    Regex::new(&format!("(?i)^{}$", escaped))
-        .unwrap_or_else(|_| Regex::new(".*").unwrap())
+    Regex::new(&format!("(?i)^{}$", escaped)).unwrap_or_else(|_| Regex::new(".*").unwrap())
 }
 
 fn chrono_now() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     // Simple ISO-8601-ish: YYYY-MM-DDTHH:MM:SSZ
     let s = secs;
-    let sec = s % 60; let s = s / 60;
-    let min = s % 60; let s = s / 60;
-    let hour = s % 24; let mut days = s / 24;
+    let sec = s % 60;
+    let s = s / 60;
+    let min = s % 60;
+    let s = s / 60;
+    let hour = s % 24;
+    let mut days = s / 24;
     let mut year = 1970u64;
     loop {
-        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+        let leap =
+            year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let dy = if leap { 366 } else { 365 };
-        if days < dy { break; }
+        if days < dy {
+            break;
+        }
         days -= dy;
         year += 1;
     }
     let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let month_days = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let month_days = [
+        31u64,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut month = 1u64;
     for &md in &month_days {
-        if days < md { break; }
+        if days < md {
+            break;
+        }
         days -= md;
         month += 1;
     }
-    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", year, month, days + 1, hour, min, sec)
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year,
+        month,
+        days + 1,
+        hour,
+        min,
+        sec
+    )
 }
 
 #[cfg(test)]
@@ -1640,7 +1922,8 @@ mod tests {
         buf.resize(20, 0u8);
         buf[18] = machine as u8;
         buf[19] = (machine >> 8) as u8;
-        let p = std::env::temp_dir().join(format!("sc-test-{}-{}.bin", std::process::id(), machine));
+        let p =
+            std::env::temp_dir().join(format!("sc-test-{}-{}.bin", std::process::id(), machine));
         std::fs::write(&p, &buf).unwrap();
         p
     }
@@ -1676,7 +1959,8 @@ mod tests {
         let buf = {
             let mut b = vec![0x7f, b'E', b'L', b'F'];
             b.resize(20, 0u8);
-            b[18] = 62; b[19] = 0;
+            b[18] = 62;
+            b[19] = 0;
             b
         };
         std::fs::write(&p, &buf).unwrap();
@@ -1691,7 +1975,8 @@ mod tests {
         let buf = {
             let mut b = vec![0x7f, b'E', b'L', b'F'];
             b.resize(20, 0u8);
-            b[18] = 183; b[19] = 0;
+            b[18] = 183;
+            b[19] = 0;
             b
         };
         std::fs::write(&q, &buf).unwrap();

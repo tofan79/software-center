@@ -2,7 +2,7 @@
 // Mirrors src/backend/packages.py
 
 use anyhow::Result;
-use scenter_appstream::{AppInfo, get_appstream, get_rpm_to_flatpak};
+use scenter_appstream::{get_appstream, get_rpm_to_flatpak, AppInfo};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
@@ -15,34 +15,48 @@ use std::process::{Command, Stdio};
 /// description, screenshots, version etc. when the user switches sources.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SourceOption {
-    pub id: String,           // package_name for native, app_id for flatpak
-    pub source: String,       // "native", "flatpak", "terra"
+    pub id: String,     // package_name for native, app_id for flatpak
+    pub source: String, // "native", "flatpak", "terra"
     pub package_name: String,
     pub installed: bool,
-    pub label: String,        // "Fedora" or "Flathub" / remote title
-    pub remote: String,       // flatpak remote name
+    pub label: String,  // "Fedora" or "Flathub" / remote title
+    pub remote: String, // flatpak remote name
     #[serde(default)]
-    pub user_remote: bool,    // true if this is a user-scoped flatpak remote
+    pub user_remote: bool, // true if this is a user-scoped flatpak remote
     // Full display data for this source — shown when the user picks this source
-    #[serde(default)] pub summary: String,
-    #[serde(default)] pub description: String,
-    #[serde(default)] pub version: String,
-    #[serde(default)] pub developer: String,
-    #[serde(default)] pub url_homepage: String,
-    #[serde(default)] pub url_bugtracker: String,
-    #[serde(default)] pub url_donation: String,
-    #[serde(default)] pub url_help: String,
-    #[serde(default)] pub url_faq: String,
-    #[serde(default)] pub url_vcs_browser: String,
-    #[serde(default)] pub url_contribute: String,
-    #[serde(default)] pub license: String,
-    #[serde(default)] pub screenshots: Vec<String>,
-    #[serde(default)] pub icon_path: String,
-    #[serde(default)] pub icon_url: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub version: String,
+    #[serde(default)]
+    pub developer: String,
+    #[serde(default)]
+    pub url_homepage: String,
+    #[serde(default)]
+    pub url_bugtracker: String,
+    #[serde(default)]
+    pub url_donation: String,
+    #[serde(default)]
+    pub url_help: String,
+    #[serde(default)]
+    pub url_faq: String,
+    #[serde(default)]
+    pub url_vcs_browser: String,
+    #[serde(default)]
+    pub url_contribute: String,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub screenshots: Vec<String>,
+    #[serde(default)]
+    pub icon_path: String,
+    #[serde(default)]
+    pub icon_url: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct NativeApp {
     pub id: String,
     pub name: String,
@@ -52,7 +66,7 @@ pub struct NativeApp {
     pub package_name: String,
     pub icon: String,
     pub icon_url: String,
-    pub icon_path: String,  // resolved local filesystem path
+    pub icon_path: String, // resolved local filesystem path
     pub categories: Vec<String>,
     pub keywords: Vec<String>,
     pub screenshots: Vec<String>,
@@ -76,7 +90,7 @@ pub struct NativeApp {
     #[serde(default)]
     pub update_pattern: String,
     #[serde(default)]
-    pub updated: String,  // latest AppStream <release date="YYYY-MM-DD"> (empty if none)
+    pub updated: String, // latest AppStream <release date="YYYY-MM-DD"> (empty if none)
     #[serde(default)]
     pub sources: Vec<SourceOption>, // populated in get_app_by_id for detail page
     #[serde(default)]
@@ -135,8 +149,17 @@ fn is_browseable(a: &NativeApp) -> bool {
     }
     if a.is_addon {
         let standalone = [
-            "game", "network", "audiovideo", "audio", "video", "graphics",
-            "office", "development", "education", "science", "accessibility",
+            "game",
+            "network",
+            "audiovideo",
+            "audio",
+            "video",
+            "graphics",
+            "office",
+            "development",
+            "education",
+            "science",
+            "accessibility",
         ];
         let cats: Vec<String> = a.categories.iter().map(|c| c.to_lowercase()).collect();
         return cats.iter().any(|c| standalone.contains(&c.as_str()));
@@ -153,10 +176,7 @@ fn fp_bare(id: &str) -> &str {
 /// True when an AppStream component is a real GUI application (as opposed to
 /// fonts, codecs, localization/langpacks, inputmethods, drivers, etc.).
 fn is_desktop_component(a: &scenter_appstream::AppInfo) -> bool {
-    matches!(
-        a.component_type.as_str(),
-        "desktop" | "desktop-application"
-    )
+    matches!(a.component_type.as_str(), "desktop" | "desktop-application")
 }
 
 /// Check whether a flatpak ID (with or without .desktop suffix) is installed.
@@ -178,13 +198,14 @@ pub fn get_installed_desktops() -> HashSet<String> {
     if let Ok(home) = std::env::var("HOME") {
         dirs.push(std::path::PathBuf::from(&home).join(".local/share/applications"));
         dirs.push(
-            std::path::PathBuf::from(home)
-                .join(".local/share/flatpak/exports/share/applications"),
+            std::path::PathBuf::from(home).join(".local/share/flatpak/exports/share/applications"),
         );
     }
     let mut set = HashSet::new();
     for dir in dirs {
-        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             if let Some(name) = e.file_name().to_str() {
                 if name.ends_with(".desktop") {
@@ -232,7 +253,8 @@ pub fn get_available() -> Result<Vec<NativeApp>> {
             if a.source == "flatpak" {
                 app.installed = fp_installed(&installed_fp, &a.id);
             } else {
-                app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
+                app.installed =
+                    native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
             }
             app
         })
@@ -399,9 +421,12 @@ fn installed_traditional_gui(installed: &HashSet<String>) -> Vec<NativeApp> {
 
     // 2) Remaining GUI apps (COPR/Terra/third-party RPMs) — enumerate
     //    /usr/share/applications/*.desktop and resolve the owning package.
-    let mut already: HashSet<String> =
-        results.iter().map(|a| a.package_name.clone()).collect();
-    results.extend(scan_installed_desktop_apps(&pkg_map, &mut already, installed));
+    let mut already: HashSet<String> = results.iter().map(|a| a.package_name.clone()).collect();
+    results.extend(scan_installed_desktop_apps(
+        &pkg_map,
+        &mut already,
+        installed,
+    ));
     results
 }
 
@@ -458,7 +483,12 @@ fn scan_installed_desktop_apps(
 
         // Owning package for this desktop file.
         let Ok(q) = Command::new("rpm")
-            .args(["-qf", "--queryformat", "%{NAME}", path.to_str().unwrap_or("")])
+            .args([
+                "-qf",
+                "--queryformat",
+                "%{NAME}",
+                path.to_str().unwrap_or(""),
+            ])
             .output()
         else {
             continue;
@@ -480,7 +510,11 @@ fn scan_installed_desktop_apps(
             None => NativeApp {
                 id: pkg.clone(),
                 package_name: pkg.clone(),
-                name: if d_name.is_empty() { pkg.clone() } else { d_name },
+                name: if d_name.is_empty() {
+                    pkg.clone()
+                } else {
+                    d_name
+                },
                 summary: if d_comment.is_empty() {
                     "Installed application".to_string()
                 } else {
@@ -532,16 +566,20 @@ fn resolve_icon(icon: &str) -> String {
 /// A lightweight view of an installed Flatpak runtime or add-on.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlatpakRuntime {
-    pub app_id:  String,
-    pub name:    String,
+    pub app_id: String,
+    pub name: String,
     pub version: String,
-    pub origin:  String,
+    pub origin: String,
 }
 
 /// Return all installed Flatpak runtimes and add-ons (not apps).
 pub fn get_installed_flatpak_runtimes() -> Vec<FlatpakRuntime> {
     let Ok(out) = Command::new("flatpak")
-        .args(["list", "--runtime", "--columns=application,name,version,origin"])
+        .args([
+            "list",
+            "--runtime",
+            "--columns=application,name,version,origin",
+        ])
         .output()
     else {
         return Vec::new();
@@ -550,16 +588,22 @@ pub fn get_installed_flatpak_runtimes() -> Vec<FlatpakRuntime> {
         .lines()
         .filter_map(|line| {
             let mut parts = line.splitn(4, '\t');
-            let app_id  = parts.next().unwrap_or("").trim();
-            let name    = parts.next().unwrap_or("").trim();
+            let app_id = parts.next().unwrap_or("").trim();
+            let name = parts.next().unwrap_or("").trim();
             let version = parts.next().unwrap_or("").trim();
-            let origin  = parts.next().unwrap_or("flathub").trim();
-            if app_id.is_empty() { return None; }
+            let origin = parts.next().unwrap_or("flathub").trim();
+            if app_id.is_empty() {
+                return None;
+            }
             Some(FlatpakRuntime {
-                app_id:  app_id.to_string(),
-                name:    if name.is_empty() { app_id.to_string() } else { name.to_string() },
+                app_id: app_id.to_string(),
+                name: if name.is_empty() {
+                    app_id.to_string()
+                } else {
+                    name.to_string()
+                },
                 version: version.to_string(),
-                origin:  origin.to_string(),
+                origin: origin.to_string(),
             })
         })
         .collect()
@@ -579,7 +623,9 @@ pub fn get_installed_flatpaks_enriched() -> Result<Vec<NativeApp>> {
         // a flatpak-sourced entry (native entries with the same ID are re-keyed
         // to "flatpak:<id>" by parse_catalog_file when both sources exist).
         let desktop_id = format!("{}.desktop", app_id);
-        let meta = appstream.get(app_id.as_str()).filter(|m| m.source == "flatpak")
+        let meta = appstream
+            .get(app_id.as_str())
+            .filter(|m| m.source == "flatpak")
             .or_else(|| appstream.get(&format!("flatpak:{}", app_id)))
             .or_else(|| appstream.get(&format!("flatpak:{}", desktop_id)))
             .or_else(|| appstream.get(&desktop_id).filter(|m| m.source == "flatpak"));
@@ -632,7 +678,9 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
         } else {
             app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
         }
-        if !is_browseable(&app) { continue; }
+        if !is_browseable(&app) {
+            continue;
+        }
 
         let name_lc = app.name.to_lowercase();
         let id_lc = app.id.to_lowercase();
@@ -641,12 +689,19 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
 
         // Summary/keyword substring matches only make sense for longer queries —
         // short ones ("zed", "net") otherwise match inside every "...ized" word.
-        let score = if name_lc.starts_with(&q) { 6 }
-            else if name_lc.contains(&q) { 5 }
-            else if id_lc.contains(&q) || pkg_lc.contains(&q) { 4 }
-            else if q.len() >= 4 && summary_lc.contains(&q) { 3 }
-            else if q.len() >= 4 && app.keywords.iter().any(|k| k.to_lowercase().contains(&q)) { 2 }
-            else { continue };
+        let score = if name_lc.starts_with(&q) {
+            6
+        } else if name_lc.contains(&q) {
+            5
+        } else if id_lc.contains(&q) || pkg_lc.contains(&q) {
+            4
+        } else if q.len() >= 4 && summary_lc.contains(&q) {
+            3
+        } else if q.len() >= 4 && app.keywords.iter().any(|k| k.to_lowercase().contains(&q)) {
+            2
+        } else {
+            continue;
+        };
 
         scored.push((score, app));
     }
@@ -711,7 +766,8 @@ pub fn search(query: &str) -> Result<Vec<NativeApp>> {
     // available as an RPM and on Flathub appears as separate entries, each with
     // its own install path — there is no "pick Fedora or Flathub" inside a row.
     scored.sort_by(|a, b| {
-        b.0.cmp(&a.0).then(a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
+        b.0.cmp(&a.0)
+            .then(a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()))
     });
     let mut apps: Vec<NativeApp> = Vec::with_capacity(scored.len());
     let mut seen_keys: HashSet<(String, String)> = HashSet::new();
@@ -737,8 +793,12 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
     let mut raw: Vec<NativeApp> = Vec::new();
     for a in appstream.values() {
         let mut app = NativeApp::from(a);
-        if !is_browseable(&app) { continue; }
-        if !app.categories.iter().any(|c| c.to_lowercase() == cat) { continue; }
+        if !is_browseable(&app) {
+            continue;
+        }
+        if !app.categories.iter().any(|c| c.to_lowercase() == cat) {
+            continue;
+        }
         if a.source == "flatpak" {
             app.installed = fp_installed(&installed_fp, &a.id);
         } else {
@@ -747,8 +807,7 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
         raw.push(app);
     }
 
-    let mut results: Vec<NativeApp> =
-        merge_multi_source(raw).into_values().collect();
+    let mut results: Vec<NativeApp> = merge_multi_source(raw).into_values().collect();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
     results.sort_by_key(|a| a.name.to_lowercase());
     Ok(results)
@@ -766,20 +825,25 @@ pub fn get_by_source(source: &str) -> Result<Vec<NativeApp>> {
     let mut raw: Vec<NativeApp> = Vec::new();
     for a in appstream.values() {
         let mut app = NativeApp::from(a);
-        if !is_browseable(&app) { continue; }
+        if !is_browseable(&app) {
+            continue;
+        }
         let is_fp = a.source == "flatpak";
         if source == "flatpak" {
-            if !is_fp { continue; }
+            if !is_fp {
+                continue;
+            }
             app.installed = fp_installed(&installed_fp, &a.id);
         } else {
-            if is_fp { continue; }
+            if is_fp {
+                continue;
+            }
             app.installed = native_is_installed(&a.package_name, &a.id, &installed_rpm, &desktops);
         }
         raw.push(app);
     }
 
-    let mut results: Vec<NativeApp> =
-        merge_multi_source(raw).into_values().collect();
+    let mut results: Vec<NativeApp> = merge_multi_source(raw).into_values().collect();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
     results.sort_by_key(|a| a.name.to_lowercase());
     Ok(results)
@@ -795,7 +859,8 @@ pub fn get_app_by_id(app_id: &str) -> Result<Option<NativeApp>> {
     // - Plain key (most apps)
     // - "native:{id}" (injected stubs from flatpak-to-rpm.json)
     // - "flatpak:{id}" (flatpak entries re-keyed by inject_native_stubs)
-    let a = appstream.get(app_id)
+    let a = appstream
+        .get(app_id)
         .or_else(|| appstream.get(&format!("native:{}", app_id)))
         .or_else(|| appstream.get(&format!("flatpak:{}", app_id)));
     let Some(a) = a else {
@@ -852,9 +917,15 @@ pub fn get_addons_for_app(app_id: &str, source_type: &str) -> Result<Vec<serde_j
     let mut addons: Vec<serde_json::Value> = appstream
         .values()
         .filter(|a| {
-            if !a.is_addon || a.extends != app_id { return false; }
+            if !a.is_addon || a.extends != app_id {
+                return false;
+            }
             // Match add-on source to the selected source type
-            if is_flatpak_source { a.source == "flatpak" } else { a.source != "flatpak" }
+            if is_flatpak_source {
+                a.source == "flatpak"
+            } else {
+                a.source != "flatpak"
+            }
         })
         .map(|a| {
             let installed = if a.source == "flatpak" {
@@ -874,7 +945,10 @@ pub fn get_addons_for_app(app_id: &str, source_type: &str) -> Result<Vec<serde_j
         .collect();
 
     addons.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
+        a["name"]
+            .as_str()
+            .unwrap_or("")
+            .cmp(b["name"].as_str().unwrap_or(""))
     });
 
     Ok(addons)
@@ -888,7 +962,11 @@ fn source_option_from_native_app(app: &NativeApp) -> SourceOption {
         ""
     };
     SourceOption {
-        id: if app.source == "flatpak" { fp_bare(&app.id).to_string() } else { app.id.clone() },
+        id: if app.source == "flatpak" {
+            fp_bare(&app.id).to_string()
+        } else {
+            app.id.clone()
+        },
         source: app.source.clone(),
         package_name: app.package_name.clone(),
         installed: app.installed,
@@ -921,7 +999,11 @@ fn source_option_from_app_info(
     user_remote: bool,
 ) -> SourceOption {
     SourceOption {
-        id: if info.source == "flatpak" { fp_bare(&info.id).to_string() } else { info.id.clone() },
+        id: if info.source == "flatpak" {
+            fp_bare(&info.id).to_string()
+        } else {
+            info.id.clone()
+        },
         source: info.source.clone(),
         package_name: info.package_name.clone(),
         installed,
@@ -953,7 +1035,10 @@ fn merge_multi_source(apps: Vec<NativeApp>) -> HashMap<String, NativeApp> {
     // Group by name_lower
     let mut by_name: HashMap<String, Vec<NativeApp>> = HashMap::new();
     for app in apps {
-        by_name.entry(app.name.to_lowercase()).or_default().push(app);
+        by_name
+            .entry(app.name.to_lowercase())
+            .or_default()
+            .push(app);
     }
 
     let mut out: HashMap<String, NativeApp> = HashMap::new();
@@ -1035,17 +1120,26 @@ fn build_sources(
         let pkg = &primary.package_name;
         let native_key = format!("native:{}", pkg);
         let name_lc = primary.name.to_lowercase();
-        let alt = appstream.get(&native_key)
-            .or_else(|| appstream.values().find(|a| a.source != "flatpak" && a.package_name == *pkg))
-            .or_else(|| appstream.values().find(|a| {
-                a.source != "flatpak"
-                    && a.name.to_lowercase() == name_lc
-                    && !a.package_name.is_empty()
-                    && !a.pkg_name_guessed
-            }));
+        let alt = appstream
+            .get(&native_key)
+            .or_else(|| {
+                appstream
+                    .values()
+                    .find(|a| a.source != "flatpak" && a.package_name == *pkg)
+            })
+            .or_else(|| {
+                appstream.values().find(|a| {
+                    a.source != "flatpak"
+                        && a.name.to_lowercase() == name_lc
+                        && !a.package_name.is_empty()
+                        && !a.pkg_name_guessed
+                })
+            });
         if let Some(nat) = alt {
-            let nat_installed = native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
-                if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names) {
+            let nat_installed =
+                native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
+            if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names)
+            {
                 sources.push(source_option_from_app_info(nat, nat_installed, "", false));
             }
         }
@@ -1057,17 +1151,16 @@ fn build_sources(
         let fp_key = format!("flatpak:{}", app_id);
         let name_lc = primary.name.to_lowercase();
         let rpm_to_fp = get_rpm_to_flatpak();
-        let fp_via_rpm = rpm_to_fp.get(&primary.package_name)
+        let fp_via_rpm = rpm_to_fp
+            .get(&primary.package_name)
             .and_then(|fp_id| appstream.get(&format!("flatpak:{}", fp_id)));
-        let alt = appstream.get(&fp_key)
-            .or(fp_via_rpm)
-            .or_else(|| {
-                appstream.values().find(|info| {
-                    info.source == "flatpak"
-                        && info.name.to_lowercase() == name_lc
-                        && !info.package_name.is_empty()
-                })
-            });
+        let alt = appstream.get(&fp_key).or(fp_via_rpm).or_else(|| {
+            appstream.values().find(|info| {
+                info.source == "flatpak"
+                    && info.name.to_lowercase() == name_lc
+                    && !info.package_name.is_empty()
+            })
+        });
         if let Some(fp) = alt {
             let installed_sys = fp_installed(&installed_fp_system, &fp.id);
             let installed_usr = fp_installed(&installed_fp_user, &fp.id);
@@ -1118,9 +1211,9 @@ fn enrich_sources(
             let rpm_via_map = scenter_appstream::load_flatpak_to_rpm()
                 .get(&app.id.to_lowercase())
                 .and_then(|rpm| {
-                    appstream.values().find(|info| {
-                        info.source != "flatpak" && info.package_name == *rpm
-                    })
+                    appstream
+                        .values()
+                        .find(|info| info.source != "flatpak" && info.package_name == *rpm)
                 });
             let alt = rpm_via_map.or_else(|| {
                 appstream.values().find(|info| {
@@ -1131,8 +1224,11 @@ fn enrich_sources(
                 })
             });
             if let Some(nat) = alt {
-                let nat_installed = native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
-            if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names) {
+                let nat_installed =
+                    native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
+                if nat_installed
+                    || native_option_viable(&nat.package_name, installed_rpm, &repo_names)
+                {
                     let fp_src = source_option_from_native_app(app);
                     let nat_src = source_option_from_app_info(nat, nat_installed, "", false);
                     app.sources = vec![nat_src, fp_src]; // native first
@@ -1146,17 +1242,16 @@ fn enrich_sources(
             // 3. Name-based fallback
             let fp_key = format!("flatpak:{}", app.id);
             let rpm_to_fp = get_rpm_to_flatpak();
-            let fp_via_rpm = rpm_to_fp.get(&app.package_name)
+            let fp_via_rpm = rpm_to_fp
+                .get(&app.package_name)
                 .and_then(|fp_id| appstream.get(&format!("flatpak:{}", fp_id)));
-            let alt = appstream.get(&fp_key)
-                .or(fp_via_rpm)
-                .or_else(|| {
-                    appstream.values().find(|info| {
-                        info.source == "flatpak"
-                            && info.name.to_lowercase() == name_lc
-                            && !info.package_name.is_empty()
-                    })
-                });
+            let alt = appstream.get(&fp_key).or(fp_via_rpm).or_else(|| {
+                appstream.values().find(|info| {
+                    info.source == "flatpak"
+                        && info.name.to_lowercase() == name_lc
+                        && !info.package_name.is_empty()
+                })
+            });
             if let Some(fp) = alt {
                 let fp_installed = fp_installed(installed_fp, &fp.id);
                 let nat_src = source_option_from_native_app(app);
@@ -1245,18 +1340,25 @@ pub fn get_local_rpm_info(path: &str) -> serde_json::Value {
         }
     }
     let stem = std::path::Path::new(path)
-        .file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
-    let name    = data.get("name").cloned().unwrap_or_else(|| stem.clone());
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_string();
+    let name = data.get("name").cloned().unwrap_or_else(|| stem.clone());
     let version = data.get("version").cloned().unwrap_or_default();
     let summary = data.get("summary").cloned().unwrap_or_default();
-    let desc    = data.get("description").cloned().unwrap_or_default();
-    let url     = data.get("url").cloned().filter(|u| u != "(none)").unwrap_or_default();
+    let desc = data.get("description").cloned().unwrap_or_default();
+    let url = data
+        .get("url")
+        .cloned()
+        .filter(|u| u != "(none)")
+        .unwrap_or_default();
     let size: i64 = data.get("size").and_then(|s| s.parse().ok()).unwrap_or(0);
     let already_installed = is_installed(&name);
     let appstream = get_appstream();
-    let icon_meta = appstream
-        .values()
-        .find(|app| app.package_name == name || app.id == name || app.name.eq_ignore_ascii_case(&name));
+    let icon_meta = appstream.values().find(|app| {
+        app.package_name == name || app.id == name || app.name.eq_ignore_ascii_case(&name)
+    });
     let icon_path = icon_meta
         .map(|app| app.icon_path.clone())
         .unwrap_or_default();
@@ -1365,9 +1467,25 @@ const REPO_QUERY_TIMEOUT_SECS: u64 = 180;
 fn is_repo_pkg_noise(name: &str) -> bool {
     let n = name.to_lowercase();
     [
-        "-devel", "-debuginfo", "-debugsource", "-static", "-doc", "-docs",
-        "-headers", "-libs", "-lib", "-data", "-common", "-langpack",
-        "-langpacks", "-tests", "-test", "-help", "-src", "-source", "-sdk",
+        "-devel",
+        "-debuginfo",
+        "-debugsource",
+        "-static",
+        "-doc",
+        "-docs",
+        "-headers",
+        "-libs",
+        "-lib",
+        "-data",
+        "-common",
+        "-langpack",
+        "-langpacks",
+        "-tests",
+        "-test",
+        "-help",
+        "-src",
+        "-source",
+        "-sdk",
     ]
     .iter()
     .any(|s| n.ends_with(s))
@@ -1386,7 +1504,9 @@ fn parse_repo_cache(text: &str) -> Vec<RepoPkg> {
     let mut seen: HashSet<&str> = HashSet::new();
     for line in text.lines() {
         let mut it = line.split('\t');
-        let (Some(name), Some(summary)) = (it.next(), it.next()) else { continue };
+        let (Some(name), Some(summary)) = (it.next(), it.next()) else {
+            continue;
+        };
         if name.is_empty() || !seen.insert(name) {
             continue;
         }
@@ -1422,8 +1542,12 @@ fn dnf_metadata_newest() -> Option<std::time::SystemTime> {
 /// not hit the hard freshness window. A minimum age avoids re-querying when dnf
 /// just wrote metadata seconds ago for unrelated reasons.
 fn repo_cache_fresh(path: &std::path::Path) -> bool {
-    let Ok(meta) = path.metadata() else { return false };
-    let Ok(cache_mtime) = meta.modified() else { return false };
+    let Ok(meta) = path.metadata() else {
+        return false;
+    };
+    let Ok(cache_mtime) = meta.modified() else {
+        return false;
+    };
     if let Ok(elapsed) = cache_mtime.elapsed() {
         if elapsed.as_secs() > REPO_CACHE_FRESH_FOR_SECS {
             return false;
@@ -1470,7 +1594,13 @@ fn get_repo_packages() -> Vec<RepoPkg> {
     }
 
     let Ok(mut child) = Command::new("dnf5")
-        .args(["-y", "--skip-file-locks", "repoquery", "--qf", "%{name}\t%{summary}\t%{reponame}\n"])
+        .args([
+            "-y",
+            "--skip-file-locks",
+            "repoquery",
+            "--qf",
+            "%{name}\t%{summary}\t%{reponame}\n",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
@@ -1567,7 +1697,10 @@ fn find_local_rpm_icon(pkg: &str) -> String {
     // Search hicolor theme for common sizes (largest first)
     for size in &["256x256", "128x128", "64x64", "48x48", "32x32"] {
         for ext in &["png", "svg", "xpm"] {
-            let path = format!("/usr/share/icons/hicolor/{}/apps/{}.{}", size, icon_name, ext);
+            let path = format!(
+                "/usr/share/icons/hicolor/{}/apps/{}.{}",
+                size, icon_name, ext
+            );
             if std::path::Path::new(&path).exists() {
                 return path;
             }
@@ -1610,11 +1743,12 @@ fn rpm_is_installed(pkg: &str) -> bool {
     // For explicit arch-qualified names (e.g. "mangohud.i686") use direct rpm -q;
     // --whatprovides doesn't match "name.arch" syntax.
     // For plain names use --whatprovides so virtual provides resolve (e.g. "nodejs" → "nodejs22").
-    let args: &[&str] = if pkg.ends_with(".i686") || pkg.ends_with(".x86_64") || pkg.ends_with(".noarch") {
-        &["-q", "--quiet", pkg]
-    } else {
-        &["-q", "--quiet", "--whatprovides", pkg]
-    };
+    let args: &[&str] =
+        if pkg.ends_with(".i686") || pkg.ends_with(".x86_64") || pkg.ends_with(".noarch") {
+            &["-q", "--quiet", pkg]
+        } else {
+            &["-q", "--quiet", "--whatprovides", pkg]
+        };
     Command::new("rpm")
         .args(args)
         .output()

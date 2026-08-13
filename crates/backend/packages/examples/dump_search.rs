@@ -4,7 +4,14 @@ fn main() {
         match scenter_packages::search(q) {
             Ok(apps) => {
                 for a in &apps {
-                    println!("  [{}] {} | pkg={} | installed={} | src={}", a.source, a.name, a.package_name, a.installed, a.summary.chars().take(40).collect::<String>());
+                    println!(
+                        "  [{}] {} | pkg={} | installed={} | src={}",
+                        a.source,
+                        a.name,
+                        a.package_name,
+                        a.installed,
+                        a.summary.chars().take(40).collect::<String>()
+                    );
                 }
             }
             Err(e) => println!("  ERR: {}", e),

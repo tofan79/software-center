@@ -92,11 +92,11 @@ pub struct AppInfo {
     pub description: String,
     pub icon: String,
     pub icon_url: String,
-    pub icon_path: String,        // resolved local filesystem path (empty if not found)
+    pub icon_path: String, // resolved local filesystem path (empty if not found)
     pub categories: Vec<String>,
     pub keywords: Vec<String>,
     pub screenshots: Vec<String>,
-    pub source: String,           // "native", "flatpak", "terra", etc.
+    pub source: String, // "native", "flatpak", "terra", etc.
     pub package_name: String,
     pub version: String,
     pub developer: String,
@@ -110,14 +110,14 @@ pub struct AppInfo {
     pub license: String,
     pub content_rating: String,
     pub is_addon: bool,
-    pub extends: String,          // parent app id for addons
-    pub pkg_name_guessed: bool,   // true when package_name was guessed from id, not from <pkgname>
+    pub extends: String,        // parent app id for addons
+    pub pkg_name_guessed: bool, // true when package_name was guessed from id, not from <pkgname>
     #[serde(default)]
-    pub remotes: Vec<String>,     // all flatpak remote names this app id was found in (e.g. ["flathub", "cosmic"]); empty for non-flatpak sources
+    pub remotes: Vec<String>, // all flatpak remote names this app id was found in (e.g. ["flathub", "cosmic"]); empty for non-flatpak sources
     #[serde(default)]
-    pub component_type: String,   // appstream component type: "desktop", "desktop-application", "font", "codec", ...
+    pub component_type: String, // appstream component type: "desktop", "desktop-application", "font", "codec", ...
     #[serde(default)]
-    pub updated: String,          // latest <release date="YYYY-MM-DD"> (empty if none)
+    pub updated: String, // latest <release date="YYYY-MM-DD"> (empty if none)
 }
 
 // ── Paths ─────────────────────────────────────────────────────────────────────
@@ -151,7 +151,10 @@ fn versioned_icon_dirs(fedora_ver: &str) -> Vec<String> {
     let mut dirs = Vec::new();
     // RPM Fusion
     for repo in &["rpmfusion-free", "rpmfusion-nonfree"] {
-        dirs.push(format!("/usr/share/swcatalog/icons/{}-{}/64x64", repo, fedora_ver));
+        dirs.push(format!(
+            "/usr/share/swcatalog/icons/{}-{}/64x64",
+            repo, fedora_ver
+        ));
     }
     // Terra
     let terra_suffixes = ["", "-mesa", "-nvidia", "-extras", "-multimedia"];
@@ -191,7 +194,9 @@ fn scan_appstream_files(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
     if depth == 0 || !dir.exists() {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let p = entry.path();
         if p.is_dir() {
@@ -261,11 +266,7 @@ fn load_appstream_inner() -> Result<HashMap<String, AppInfo>> {
     for id in app_ids {
         let app = apps.get_mut(&id).unwrap();
         if app.icon_path.is_empty() {
-            app.icon_path = resolve_icon_path(
-                app,
-                &home_icon_cache,
-                &terra_dirs,
-            );
+            app.icon_path = resolve_icon_path(app, &home_icon_cache, &terra_dirs);
         }
         // Synthesize icon_url fallback for apps without a local icon:
         //   org.kde.*  → apps.kde.org SVG (mirrors Python _FetchThread logic)
@@ -273,12 +274,18 @@ fn load_appstream_inner() -> Result<HashMap<String, AppInfo>> {
         // Non-flathub remotes are skipped: their app IDs don't exist on the
         // Flathub CDN, so a synthesized URL would 404.
         if app.icon_path.is_empty() && app.icon_url.is_empty() {
-            let clean_id = app.id.trim_start_matches("flatpak:").trim_end_matches(".desktop");
+            let clean_id = app
+                .id
+                .trim_start_matches("flatpak:")
+                .trim_end_matches(".desktop");
             if clean_id.starts_with("org.kde.") {
                 app.icon_url = format!("https://apps.kde.org/app-icons/{}.svg", clean_id);
             } else if app.source == "flatpak"
                 && (app.remotes.is_empty()
-                    || app.remotes.iter().any(|r| r.eq_ignore_ascii_case("flathub")))
+                    || app
+                        .remotes
+                        .iter()
+                        .any(|r| r.eq_ignore_ascii_case("flathub")))
             {
                 // Flathub CDN: /repo/appstream/x86_64/icons/128x128/{id}.png
                 app.icon_url = format!(
@@ -336,21 +343,21 @@ fn find_flatpak_app_icon(app_id: &str) -> Option<String> {
     if !deploy_dir.exists() {
         return None;
     }
-    let Ok(hashes) = std::fs::read_dir(deploy_dir) else { return None };
+    let Ok(hashes) = std::fs::read_dir(deploy_dir) else {
+        return None;
+    };
     for hash_entry in hashes.flatten() {
-        let icon_base = hash_entry.path()
-            .join("files/share/app-info/icons/flatpak");
+        let icon_base = hash_entry.path().join("files/share/app-info/icons/flatpak");
         if !icon_base.exists() {
             continue;
         }
-        let Ok(sizes) = std::fs::read_dir(&icon_base) else { continue };
+        let Ok(sizes) = std::fs::read_dir(&icon_base) else {
+            continue;
+        };
         for size_entry in sizes.flatten() {
             let size_dir = size_entry.path();
             // Try <id>.desktop.png first, then plain <id>.png
-            for filename in &[
-                format!("{}.desktop.png", app_id),
-                format!("{}.png", app_id),
-            ] {
+            for filename in &[format!("{}.desktop.png", app_id), format!("{}.png", app_id)] {
                 let p = size_dir.join(filename);
                 if p.exists() {
                     return Some(p.to_string_lossy().into_owned());
@@ -371,9 +378,18 @@ pub fn resolve_icon_path(app: &AppInfo, home_icon_cache: &str, dynamic_dirs: &[S
     // Check in the Flatpak icon cache dirs first
     if source == "flatpak" {
         let candidates = [
-            format!("/var/lib/flatpak/appstream/flathub/x86_64/active/icons/128x128/{}.png", app_id),
-            format!("/var/lib/flatpak/appstream/flathub/x86_64/active/icons/64x64/{}.png", app_id),
-            format!("/var/lib/flatpak/appstream/fedora-flatpaks/x86_64/active/icons/64x64/{}.png", app_id),
+            format!(
+                "/var/lib/flatpak/appstream/flathub/x86_64/active/icons/128x128/{}.png",
+                app_id
+            ),
+            format!(
+                "/var/lib/flatpak/appstream/flathub/x86_64/active/icons/64x64/{}.png",
+                app_id
+            ),
+            format!(
+                "/var/lib/flatpak/appstream/fedora-flatpaks/x86_64/active/icons/64x64/{}.png",
+                app_id
+            ),
         ];
         for p in &candidates {
             if Path::new(p).exists() {
@@ -401,7 +417,8 @@ pub fn resolve_icon_path(app: &AppInfo, home_icon_cache: &str, dynamic_dirs: &[S
             return app.icon.clone();
         }
         let icon = &app.icon;
-        let stem = icon.trim_end_matches(".png")
+        let stem = icon
+            .trim_end_matches(".png")
             .trim_end_matches(".svg")
             .trim_end_matches(".xpm");
 
@@ -509,8 +526,8 @@ fn merge_remotes(apps: &HashMap<String, AppInfo>, key: &str, app: &mut AppInfo) 
 
 fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Result<()> {
     use flate2::read::GzDecoder;
-    use quick_xml::Reader;
     use quick_xml::events::Event;
+    use quick_xml::Reader;
 
     // Determine source from the full path (not just filename — flatpak ships
     // a generic "appstream.xml.gz" that only reveals its origin via directory)
@@ -566,23 +583,25 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                             .attributes()
                             .filter_map(|a| a.ok())
                             .find(|a| a.key.as_ref() == b"type")
-                            .map(|a| {
-                                String::from_utf8_lossy(&a.value).to_lowercase()
-                            })
+                            .map(|a| String::from_utf8_lossy(&a.value).to_lowercase())
                             .unwrap_or_default();
                         current = Some(AppInfo {
                             source: source.to_string(),
                             is_addon: kind == "addon",
                             component_type: kind.clone(),
-                            remotes: if remote.is_empty() { Vec::new() } else { vec![remote.clone()] },
+                            remotes: if remote.is_empty() {
+                                Vec::new()
+                            } else {
+                                vec![remote.clone()]
+                            },
                             ..Default::default()
                         });
                     }
                     b"id" if current.is_some() => in_id = true,
                     b"name" if current.is_some() => {
-                        let lang_ok = !e.attributes().any(|a| {
-                            a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false)
-                        });
+                        let lang_ok = !e
+                            .attributes()
+                            .any(|a| a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false));
                         if in_developer_block {
                             // <name> inside <developer> → developer name, not app name
                             in_developer = lang_ok;
@@ -591,14 +610,14 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                         }
                     }
                     b"summary" if current.is_some() => {
-                        in_summary = !e.attributes().any(|a| {
-                            a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false)
-                        });
+                        in_summary = !e
+                            .attributes()
+                            .any(|a| a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false));
                     }
                     b"description" if current.is_some() => {
-                        in_description = !e.attributes().any(|a| {
-                            a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false)
-                        });
+                        in_description = !e
+                            .attributes()
+                            .any(|a| a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false));
                     }
                     b"pkgname" if current.is_some() => in_pkgname = true,
                     b"developer" if current.is_some() => {
@@ -608,48 +627,42 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                     }
                     b"developer_name" if current.is_some() => {
                         // Older AppStream format: <developer_name>...</developer_name>
-                        in_developer = !e.attributes().any(|a| {
-                            a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false)
-                        });
+                        in_developer = !e
+                            .attributes()
+                            .any(|a| a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false));
                     }
                     b"icon" if current.is_some() => {
                         // "cached" and "stock" both provide a local icon name/file to search for.
                         // "local" provides an absolute path — treat the same way.
                         in_icon_cached = e.attributes().any(|a| {
                             a.map(|a| {
-                                a.key.as_ref() == b"type" && matches!(
-                                    a.value.as_ref(),
-                                    b"cached" | b"stock" | b"local"
-                                )
+                                a.key.as_ref() == b"type"
+                                    && matches!(a.value.as_ref(), b"cached" | b"stock" | b"local")
                             })
                             .unwrap_or(false)
                         });
                         in_icon_remote = e.attributes().any(|a| {
-                            a.map(|a| {
-                                a.key.as_ref() == b"type" && a.value.as_ref() == b"remote"
-                            })
-                            .unwrap_or(false)
+                            a.map(|a| a.key.as_ref() == b"type" && a.value.as_ref() == b"remote")
+                                .unwrap_or(false)
                         });
                     }
                     b"category" if current.is_some() => in_category = true,
                     b"keyword" if current.is_some() => {
-                        let lang_ok = !e.attributes().any(|a| {
-                            a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false)
-                        });
+                        let lang_ok = !e
+                            .attributes()
+                            .any(|a| a.map(|a| a.key.as_ref() == b"xml:lang").unwrap_or(false));
                         in_keyword = lang_ok;
                     }
                     b"image" if current.is_some() => {
                         // Only capture "source" (full-res) images — skip thumbnails.
                         // AppStream ships one type="source" + multiple type="thumbnail"
                         // entries per screenshot; thumbnails are lower-res dupes.
-                        let img_type = e.attributes()
+                        let img_type = e
+                            .attributes()
                             .filter_map(|a| a.ok())
                             .find(|a| a.key.as_ref() == b"type")
                             .map(|a| String::from_utf8_lossy(&a.value).to_lowercase());
-                        in_screenshot_image = matches!(
-                            img_type.as_deref(),
-                            None | Some("source")
-                        );
+                        in_screenshot_image = matches!(img_type.as_deref(), None | Some("source"));
                     }
                     b"url" if current.is_some() => {
                         current_url_type = e
@@ -664,11 +677,13 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                         // <release date="YYYY-MM-DD" .../> or <release timestamp="<epoch>"/>
                         // — keep the newest date only (releases may be unordered).
                         let attrs: Vec<_> = e.attributes().filter_map(|a| a.ok()).collect();
-                        let mut new_date = attrs.iter()
+                        let mut new_date = attrs
+                            .iter()
                             .find(|a| a.key.as_ref() == b"date")
                             .map(|a| String::from_utf8_lossy(&a.value).to_string());
                         if new_date.is_none() {
-                            if let Some(ts) = attrs.iter()
+                            if let Some(ts) = attrs
+                                .iter()
                                 .find(|a| a.key.as_ref() == b"timestamp")
                                 .and_then(|a| std::str::from_utf8(&a.value).ok())
                                 .and_then(|s| s.parse::<i64>().ok())
@@ -761,7 +776,8 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                             } else if app.package_name.is_empty() {
                                 // Native with no <pkgname> — guess from last segment of id
                                 let clean = app.id.trim_end_matches(".desktop");
-                                let guess = clean.split('.').next_back().unwrap_or(clean).to_lowercase();
+                                let guess =
+                                    clean.split('.').next_back().unwrap_or(clean).to_lowercase();
                                 app.package_name = guess;
                                 app.pkg_name_guessed = true;
                             }
@@ -770,7 +786,8 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                             // metainfo without <pkgname>; the swcatalog has the explicit
                             // name. Whichever is processed last would otherwise clobber
                             // the explicit name with a guessed one.
-                            let existing_explicit_pkg: Option<(String, String)> = apps.get(&app.id)
+                            let existing_explicit_pkg: Option<(String, String)> = apps
+                                .get(&app.id)
                                 .filter(|ex| !ex.pkg_name_guessed && !ex.package_name.is_empty())
                                 .map(|ex| (ex.package_name.clone(), ex.source.clone()));
 
@@ -920,11 +937,14 @@ fn inject_native_stubs(apps: &mut HashMap<String, AppInfo>) {
     for (fp_id_lower, rpm_name) in &fp_to_rpm {
         // Find the flatpak entry by case-insensitive ID match
         let fp_id_lc = fp_id_lower.to_lowercase();
-        let fp_entry = apps.iter().find(|(_, a)| {
-            a.source == "flatpak" && a.id.to_lowercase() == fp_id_lc
-        }).map(|(k, a)| (k.clone(), a.clone()));
+        let fp_entry = apps
+            .iter()
+            .find(|(_, a)| a.source == "flatpak" && a.id.to_lowercase() == fp_id_lc)
+            .map(|(k, a)| (k.clone(), a.clone()));
 
-        let Some((fp_key, fp_entry)) = fp_entry else { continue };
+        let Some((fp_key, fp_entry)) = fp_entry else {
+            continue;
+        };
 
         // Always re-key the flatpak to "flatpak:{id}" so build_sources can find it
         // regardless of whether a native entry already exists.
@@ -936,9 +956,9 @@ fn inject_native_stubs(apps: &mut HashMap<String, AppInfo>) {
         // Skip stub creation if a native entry already exists with this package_name.
         // If so, confirm the mapping is explicit (not guessed) so the entry stays
         // browseable and visible in build_sources name-based fallback.
-        let already_exists = apps.values().any(|a| {
-            a.source != "flatpak" && a.package_name == *rpm_name
-        });
+        let already_exists = apps
+            .values()
+            .any(|a| a.source != "flatpak" && a.package_name == *rpm_name);
         if already_exists {
             if let Some(nat) = apps.values_mut().find(|a| {
                 a.source != "flatpak" && a.package_name == *rpm_name && a.pkg_name_guessed
@@ -972,7 +992,9 @@ fn apply_overrides(apps: &mut HashMap<String, AppInfo>) {
     if !path.exists() {
         return;
     }
-    let Ok(content) = std::fs::read_to_string(path) else { return };
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
     let Ok(overrides): Result<HashMap<String, serde_json::Value>, _> =
         serde_json::from_str(&content)
     else {

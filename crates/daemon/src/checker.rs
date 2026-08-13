@@ -32,19 +32,35 @@ impl UpdateResult {
         let mut parts = Vec::new();
         if !self.packages.is_empty() {
             let n = self.packages.len();
-            parts.push(format!("{} package update{}", n, if n != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} package update{}",
+                n,
+                if n != 1 { "s" } else { "" }
+            ));
         }
         if !self.flatpak.is_empty() {
             let n = self.flatpak.len();
-            parts.push(format!("{} Flatpak update{}", n, if n != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} Flatpak update{}",
+                n,
+                if n != 1 { "s" } else { "" }
+            ));
         }
         if !self.appimages.is_empty() {
             let n = self.appimages.len();
-            parts.push(format!("{} AppImage update{}", n, if n != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} AppImage update{}",
+                n,
+                if n != 1 { "s" } else { "" }
+            ));
         }
         if !self.gnome_extensions.is_empty() {
             let n = self.gnome_extensions.len();
-            parts.push(format!("{} GNOME extension update{}", n, if n != 1 { "s" } else { "" }));
+            parts.push(format!(
+                "{} GNOME extension update{}",
+                n,
+                if n != 1 { "s" } else { "" }
+            ));
         }
         Some(parts.join("\n"))
     }
@@ -52,11 +68,11 @@ impl UpdateResult {
 
 /// Run all checks in parallel so total time ≈ slowest single check.
 pub async fn run_checks(settings: &Settings) -> UpdateResult {
-    let check_pkgs   = settings.auto_check_packages;
-    let check_fp     = settings.auto_check_flatpak;
-    let check_ai     = settings.auto_check_appimages;
-    let check_ext    = true;
-    let auto_update  = settings.auto_update;
+    let check_pkgs = settings.auto_check_packages;
+    let check_fp = settings.auto_check_flatpak;
+    let check_ai = settings.auto_check_appimages;
+    let check_ext = true;
+    let auto_update = settings.auto_update;
 
     log::info!("Starting update checks (packages={check_pkgs}, flatpak={check_fp}, appimages={check_ai}, gnome_extensions={check_ext})");
 
@@ -68,7 +84,7 @@ pub async fn run_checks(settings: &Settings) -> UpdateResult {
                 let res = run_scenter_update_with_timeout(PKG_TIMEOUT).await;
                 match &res {
                     Ok((_, pkgs)) => log::info!("Package check done: {} update(s)", pkgs.len()),
-                    Err(e)        => log::warn!("Package check failed: {}", e),
+                    Err(e) => log::warn!("Package check failed: {}", e),
                 }
                 res.ok()
             } else {
@@ -79,15 +95,14 @@ pub async fn run_checks(settings: &Settings) -> UpdateResult {
         async {
             if check_fp {
                 log::info!("Checking flatpak updates via Rust backend (icon-enriched)");
-                let updates: Vec<serde_json::Value> =
-                    tokio::task::spawn_blocking(|| {
-                        scenter_flatpak::get_all_updates()
-                            .into_iter()
-                            .filter_map(|f| serde_json::to_value(f).ok())
-                            .collect()
-                    })
-                    .await
-                    .unwrap_or_default();
+                let updates: Vec<serde_json::Value> = tokio::task::spawn_blocking(|| {
+                    scenter_flatpak::get_all_updates()
+                        .into_iter()
+                        .filter_map(|f| serde_json::to_value(f).ok())
+                        .collect()
+                })
+                .await
+                .unwrap_or_default();
                 log::info!("Flatpak check done: {} update(s)", updates.len());
                 Some((true, updates))
             } else {
@@ -119,17 +134,16 @@ pub async fn run_checks(settings: &Settings) -> UpdateResult {
     );
 
     let raw_packages = pkg_res.map(|(_, v)| v).unwrap_or_default();
-    let packages = tokio::task::spawn_blocking(move || {
-        scenter_updates::enrich_package_updates(raw_packages)
-    })
-    .await
-    .unwrap_or_default();
+    let packages =
+        tokio::task::spawn_blocking(move || scenter_updates::enrich_package_updates(raw_packages))
+            .await
+            .unwrap_or_default();
 
     let mut result = UpdateResult {
         packages,
-        flatpak:         fp_res.map(|(_, v)| v).unwrap_or_default(),
+        flatpak: fp_res.map(|(_, v)| v).unwrap_or_default(),
         gnome_extensions: ext_res.map(|(_, v)| v).unwrap_or_default(),
-        appimages:       ai_res,
+        appimages: ai_res,
         total: 0,
     };
 
@@ -152,24 +166,27 @@ pub async fn run_checks(settings: &Settings) -> UpdateResult {
             async {
                 if !result.flatpak.is_empty() {
                     let _ = run_command(&["flatpak", "update", "-y", "--noninteractive"]).await;
-                    let updates: Vec<serde_json::Value> =
-                        tokio::task::spawn_blocking(|| {
-                            scenter_flatpak::get_all_updates()
-                                .into_iter()
-                                .filter_map(|f| serde_json::to_value(f).ok())
-                                .collect()
-                        })
-                        .await
-                        .ok()
-                        .unwrap_or_default();
+                    let updates: Vec<serde_json::Value> = tokio::task::spawn_blocking(|| {
+                        scenter_flatpak::get_all_updates()
+                            .into_iter()
+                            .filter_map(|f| serde_json::to_value(f).ok())
+                            .collect()
+                    })
+                    .await
+                    .ok()
+                    .unwrap_or_default();
                     Some(updates)
                 } else {
                     None
                 }
             },
         );
-        if let Some(pkgs) = new_pkg { result.packages = pkgs; }
-        if let Some(fps)  = new_fp  { result.flatpak  = fps;  }
+        if let Some(pkgs) = new_pkg {
+            result.packages = pkgs;
+        }
+        if let Some(fps) = new_fp {
+            result.flatpak = fps;
+        }
         result.total = result.packages.len()
             + result.flatpak.len()
             + result.gnome_extensions.len()
@@ -225,7 +242,8 @@ async fn check_gnome_extension_updates() -> Vec<serde_json::Value> {
             .filter(|s| !s.is_empty())
             .map(absolute_gnome_extension_url)
             .unwrap_or_else(|| format!("{}/static/images/plugin.png", GNOME_EXTENSIONS_BASE));
-        let name = remote["name"].as_str()
+        let name = remote["name"]
+            .as_str()
             .filter(|s| !s.is_empty())
             .unwrap_or(&installed_name);
 
@@ -240,7 +258,9 @@ async fn check_gnome_extension_updates() -> Vec<serde_json::Value> {
     }
 
     updates.sort_by(|a, b| {
-        a["name"].as_str().unwrap_or("")
+        a["name"]
+            .as_str()
+            .unwrap_or("")
             .to_lowercase()
             .cmp(&b["name"].as_str().unwrap_or("").to_lowercase())
     });
@@ -310,8 +330,7 @@ fn json_u32(value: &serde_json::Value) -> Option<u32> {
         .or_else(|| value.as_str().and_then(|s| s.parse::<u32>().ok()))
 }
 
-async fn run_scenter_update(
-) -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
+async fn run_scenter_update() -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
     run_scenter_update_with_timeout(CMD_TIMEOUT).await
 }
 
@@ -320,9 +339,7 @@ async fn run_scenter_update_with_timeout(
 ) -> anyhow::Result<(bool, Vec<serde_json::Value>)> {
     let updates = tokio::time::timeout(
         t,
-        tokio::task::spawn_blocking(|| {
-            scenter_updates::check_packages_script()
-        }),
+        tokio::task::spawn_blocking(scenter_updates::check_packages_script),
     )
     .await??;
 

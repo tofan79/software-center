@@ -2,7 +2,7 @@
 
 mod backend;
 use backend::SoftwareBackend;
-use qmetaobject::{QmlEngine, QString};
+use qmetaobject::{QString, QmlEngine};
 
 // Qt6 static helpers previously provided by qt_helpers.cpp. libQt6Core and
 // libQt6Gui are already linked via qmetaobject, so we call the stable mangled
@@ -42,8 +42,7 @@ fn instance_already_running() -> bool {
         return false;
     };
     // Verify the PID actually belongs to our process, not a recycled PID
-    let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", pid))
-        .unwrap_or_default();
+    let cmdline = std::fs::read_to_string(format!("/proc/{}/cmdline", pid)).unwrap_or_default();
     cmdline.contains("software-center")
 }
 
@@ -142,7 +141,9 @@ impl std::io::Write for TeeWriter {
 }
 
 fn log_file() -> std::path::PathBuf {
-    std::env::temp_dir().join("software-center").join("software-center.log")
+    std::env::temp_dir()
+        .join("software-center")
+        .join("software-center.log")
 }
 
 /// Log records that are known-noise and must not pollute the app log.
@@ -195,7 +196,10 @@ fn init_logging() {
         .ok()
         .and_then(|v| v.parse::<log::LevelFilter>().ok())
         .unwrap_or(log::LevelFilter::Info);
-    log::set_boxed_logger(Box::new(NoiseFilter { inner: Box::new(inner) })).expect("set global logger");
+    log::set_boxed_logger(Box::new(NoiseFilter {
+        inner: Box::new(inner),
+    }))
+    .expect("set global logger");
     log::set_max_level(max_level);
 }
 
@@ -207,9 +211,7 @@ fn main() {
     // Collect any file path passed via MIME type association (%f in .desktop)
     // Skip "--tray" and other flag arguments; take the first non-flag arg.
     // Must be parsed BEFORE the single-instance check so we can forward it.
-    let startup_file: Option<String> = std::env::args()
-        .skip(1)
-        .find(|a| !a.starts_with('-'));
+    let startup_file: Option<String> = std::env::args().skip(1).find(|a| !a.starts_with('-'));
 
     let startup_flag = std::env::temp_dir().join("software-center-open-file");
 
@@ -245,7 +247,8 @@ fn main() {
 
     qmetaobject::qml_register_type::<SoftwareBackend>(
         c"org.softwarecenter.Software",
-        1, 0,
+        1,
+        0,
         c"SoftwareBackend",
     );
 
@@ -265,8 +268,8 @@ fn main() {
 
     let qml_dir = std::env::var("SOFTWARE_CENTER_QML_DIR")
         .unwrap_or_else(|_| "/usr/share/software-center/qml".to_string());
-    let qml_dir = std::fs::canonicalize(&qml_dir)
-        .unwrap_or_else(|_| std::path::PathBuf::from(&qml_dir));
+    let qml_dir =
+        std::fs::canonicalize(&qml_dir).unwrap_or_else(|_| std::path::PathBuf::from(&qml_dir));
     engine.load_file(format!("file://{}/main.qml", qml_dir.display()).into());
     engine.exec();
 

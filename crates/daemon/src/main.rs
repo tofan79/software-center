@@ -114,14 +114,16 @@ async fn main() -> anyhow::Result<()> {
     // reflects the last known state instead of showing "Checking" for 20s.
     if let Ok(j) = std::fs::read_to_string(daemon_cache_path()) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&j) {
-            let count  = v["total"].as_i64().unwrap_or(0) as usize;
+            let count = v["total"].as_i64().unwrap_or(0) as usize;
             let reboot = v["reboot_required"].as_bool().unwrap_or(false);
-            tray_handle.update(|t| t.status = if reboot {
-                TrayStatus::RebootRequired
-            } else if count > 0 {
-                TrayStatus::Available(count)
-            } else {
-                TrayStatus::UpToDate
+            tray_handle.update(|t| {
+                t.status = if reboot {
+                    TrayStatus::RebootRequired
+                } else if count > 0 {
+                    TrayStatus::Available(count)
+                } else {
+                    TrayStatus::UpToDate
+                }
             });
         }
     }
@@ -162,7 +164,9 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 let path = badge_count_path();
-                let Ok(meta) = std::fs::metadata(&path) else { continue };
+                let Ok(meta) = std::fs::metadata(&path) else {
+                    continue;
+                };
                 let mtime = meta.modified().ok();
                 if mtime.is_some() && mtime == last_seen {
                     continue;
@@ -170,10 +174,12 @@ async fn main() -> anyhow::Result<()> {
                 last_seen = mtime;
                 if let Ok(raw) = std::fs::read_to_string(&path) {
                     if let Ok(count) = raw.trim().parse::<usize>() {
-                        tray_c.update(|t| t.status = if count > 0 {
-                            TrayStatus::Available(count)
-                        } else {
-                            TrayStatus::UpToDate
+                        tray_c.update(|t| {
+                            t.status = if count > 0 {
+                                TrayStatus::Available(count)
+                            } else {
+                                TrayStatus::UpToDate
+                            }
                         });
                     }
                 }
@@ -216,8 +222,10 @@ async fn main() -> anyhow::Result<()> {
                     if let Some(parent) = cache_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let _ = std::fs::write(&cache_path,
-                        serde_json::to_string_pretty(&cache).unwrap_or_default());
+                    let _ = std::fs::write(
+                        &cache_path,
+                        serde_json::to_string_pretty(&cache).unwrap_or_default(),
+                    );
 
                     let _ = std::fs::write(badge_count_path(), count.to_string());
 
