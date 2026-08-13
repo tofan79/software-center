@@ -702,6 +702,7 @@ pub struct SoftwareBackend {
                     "current_version": u.current_version,
                     "new_version":     u.new_version,
                     "download_url":    u.download_url,
+                    "icon_path":       u.icon_path,
                 }))
                 .collect();
 

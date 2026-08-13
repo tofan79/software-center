@@ -348,6 +348,7 @@ async fn check_appimages() -> Vec<serde_json::Value> {
                         "current_version": result.current_version,
                         "new_version":     result.new_version,
                         "download_url":    result.download_url,
+                        "icon_path":       result.icon_path,
                     })),
                     _ => None,
                 }
