@@ -1111,17 +1111,6 @@ pub struct SoftwareBackend {
         std::thread::spawn(move || {
             let _ = std::fs::write(log_path(), format!("Updating AppImage {}...\n", id));
 
-            // Fake-crawl progress while the blocking stream (download/extract) runs.
-            let shared_crawl = Arc::clone(&shared);
-            let crawl = std::thread::spawn(move || {
-                loop {
-                    std::thread::sleep(std::time::Duration::from_millis(200));
-                    if !shared_crawl.running.load(Ordering::Relaxed) { break; }
-                    let cur = shared_crawl.progress.load(Ordering::Relaxed);
-                    if cur < 95 { shared_crawl.progress.store((cur + 1).min(95), Ordering::Relaxed); }
-                }
-            });
-
             let mut exit_code = 1i32;
             for line in scenter_appimages::update_appimage_stream(&id, &download_url, &new_version) {
                 if let Some(code) = line.strip_prefix("__done__") {
@@ -1131,7 +1120,6 @@ pub struct SoftwareBackend {
                         let cur = shared.progress.load(Ordering::Relaxed);
                         if p > cur { shared.progress.store(p.min(95), Ordering::Relaxed); }
                     }
-                    append_log(&line);
                 } else if !line.is_empty() {
                     append_log(&line);
                 }
@@ -1140,7 +1128,6 @@ pub struct SoftwareBackend {
             log_activity(&format!("Update AppImage {}: {}", if ok { "OK" } else { "FAILED" }, id));
             shared.result.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
             shared.running.store(false, Ordering::Relaxed);
-            crawl.join().ok();
         });
     }),
 

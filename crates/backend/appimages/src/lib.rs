@@ -1061,23 +1061,31 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
-        return vec![format!("Error: {} not installed.", app_id), "__done__1".to_string()].into_iter();
+        return UpdateStreamIter::Immediate(vec![
+            format!("Error: {} not installed.", app_id),
+            "__done__1".to_string(),
+        ].into_iter());
     };
     let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
-        return vec!["Error: Failed to read sidecar.".to_string(), "__done__1".to_string()].into_iter();
+        return UpdateStreamIter::Immediate(vec![
+            "Error: Failed to read sidecar.".to_string(),
+            "__done__1".to_string(),
+        ].into_iter());
     };
 
     let name = app.name.clone();
     let old_path = app.installed_path.clone();
 
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
+        .worker_threads(1)
         .build()
         .expect("tokio runtime");
 
-    let lines = rt.block_on(async {
-        let mut out: Vec<String> = Vec::new();
-        out.push(format!("Downloading update for {}...", name));
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+
+    rt.spawn(async move {
+        let _ = tx.send(format!("Downloading update for {}...", name));
 
         let tmp_path = install_dir().join(format!("{}.AppImage.tmp", app_id));
         let client = reqwest::Client::new();
@@ -1087,41 +1095,70 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
         {
             Ok(r) => r,
             Err(e) => {
-                out.push(format!("Error: {}", e));
-                out.push("__done__1".to_string());
-                return out;
+                let _ = tx.send(format!("Error: {}", e));
+                let _ = tx.send("__done__1".to_string());
+                return;
             }
         };
 
         let total = resp.content_length().unwrap_or(0);
-        let bytes = match resp.bytes().await {
-            Ok(b) => b,
+        let mut downloaded: u64 = 0;
+        let mut last_pct: u64 = 0;
+
+        let mut file = match std::fs::File::create(&tmp_path) {
+            Ok(f) => f,
             Err(e) => {
-                out.push(format!("Error: {}", e));
-                out.push("__done__1".to_string());
-                return out;
+                let _ = tx.send(format!("Error writing file: {}", e));
+                let _ = tx.send("__done__1".to_string());
+                return;
             }
         };
-        if total > 0 {
-            out.push("DOWNLOAD:100".to_string());
-        }
-        out.push("Download complete.".to_string());
 
-        if let Err(e) = std::fs::write(&tmp_path, &bytes) {
-            out.push(format!("Error writing file: {}", e));
-            out.push("__done__1".to_string());
-            return out;
+        use futures_util::StreamExt;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = tx.send(format!("Error: {}", e));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+            };
+            if let Err(e) = std::io::Write::write_all(&mut file, &chunk) {
+                let _ = std::fs::remove_file(&tmp_path);
+                let _ = tx.send(format!("Error writing file: {}", e));
+                let _ = tx.send("__done__1".to_string());
+                return;
+            }
+            downloaded += chunk.len() as u64;
+            if total > 0 {
+                let pct = downloaded
+                    .checked_mul(100)
+                    .map(|v| v / total)
+                    .unwrap_or(100)
+                    .min(100);
+                if pct > last_pct || downloaded >= total {
+                    last_pct = pct;
+                    let _ = tx.send(format!("DOWNLOAD:{}", pct));
+                }
+            }
         }
+        if total == 0 {
+            let _ = tx.send("DOWNLOAD:100".to_string());
+        }
+        let _ = tx.send("Download complete.".to_string());
 
         // Verify the download is a real AppImage (ELF) for this machine.
         let host = host_arch();
         if let Err(e) = check_elf_and_arch(&tmp_path.to_string_lossy(), &host) {
             let _ = std::fs::remove_file(&tmp_path);
-            out.push(format!("Error: {}", e));
-            out.push("__done__1".to_string());
-            return out;
+            let _ = tx.send(format!("Error: {}", e));
+            let _ = tx.send("__done__1".to_string());
+            return;
         }
-        out.push(format!("Verified {} AppImage for {}.", machine_name_of(&tmp_path.to_string_lossy()), host));
+        let _ = tx.send(format!("Verified {} AppImage for {}.", machine_name_of(&tmp_path.to_string_lossy()), host));
 
         // Atomic replace with a backup so we can roll back on failure.
         let new_path = install_dir().join(format!("{}.AppImage", app_id));
@@ -1130,17 +1167,17 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
         if new_path.exists() {
             if let Err(e) = std::fs::rename(&new_path, &backup_path) {
                 let _ = std::fs::remove_file(&tmp_path);
-                out.push(format!("Error: {}", e));
-                out.push("__done__1".to_string());
-                return out;
+                let _ = tx.send(format!("Error: {}", e));
+                let _ = tx.send("__done__1".to_string());
+                return;
             }
         }
         if let Err(e) = std::fs::rename(&tmp_path, &new_path) {
             let _ = std::fs::remove_file(&new_path);
             let _ = std::fs::rename(&backup_path, &new_path);
-            out.push(format!("Error: {}", e));
-            out.push("__done__1".to_string());
-            return out;
+            let _ = tx.send(format!("Error: {}", e));
+            let _ = tx.send("__done__1".to_string());
+            return;
         }
         let exec_ok = {
             if let Ok(meta) = std::fs::metadata(&new_path) {
@@ -1154,9 +1191,9 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
         if !exec_ok {
             let _ = std::fs::remove_file(&new_path);
             let _ = std::fs::rename(&backup_path, &new_path);
-            out.push("Error: Failed to make AppImage executable.".to_string());
-            out.push("__done__1".to_string());
-            return out;
+            let _ = tx.send("Error: Failed to make AppImage executable.".to_string());
+            let _ = tx.send("__done__1".to_string());
+            return;
         }
         // Swapped successfully — drop the backup and any stale old file.
         let _ = std::fs::remove_file(&backup_path);
@@ -1164,7 +1201,7 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
             let _ = std::fs::remove_file(&old_path);
         }
 
-        out.push("Extracting updated metadata...".to_string());
+        let _ = tx.send("Extracting updated metadata...".to_string());
         let info = extract_appimage_info(&new_path.to_string_lossy());
         let new_version = if info.version.is_empty() {
             if new_version_hint.is_empty() { app.version.clone() } else { new_version_hint.clone() }
@@ -1184,12 +1221,40 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
             let _ = std::fs::write(&sidecar_path, json);
         }
 
-        out.push(format!("{} updated to {}.", name, new_version));
-        out.push("__done__0".to_string());
-        out
+        let _ = tx.send(format!("{} updated to {}.", name, new_version));
+        let _ = tx.send("__done__0".to_string());
     });
 
-    lines.into_iter()
+    UpdateStreamIter::Channel(AppImageUpdateStream { rx, _rt: rt })
+}
+
+struct AppImageUpdateStream {
+    rx: std::sync::mpsc::Receiver<String>,
+    _rt: tokio::runtime::Runtime,
+}
+
+impl Iterator for AppImageUpdateStream {
+    type Item = String;
+
+    fn next(&mut self) -> Option<String> {
+        self.rx.recv().ok()
+    }
+}
+
+enum UpdateStreamIter {
+    Channel(AppImageUpdateStream),
+    Immediate(std::vec::IntoIter<String>),
+}
+
+impl Iterator for UpdateStreamIter {
+    type Item = String;
+
+    fn next(&mut self) -> Option<String> {
+        match self {
+            UpdateStreamIter::Channel(c) => c.next(),
+            UpdateStreamIter::Immediate(i) => i.next(),
+        }
+    }
 }
 
 // ── Internals ─────────────────────────────────────────────────────────────────
