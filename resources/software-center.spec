@@ -88,6 +88,21 @@ install -Dm644 resources/software-center-tray.desktop \
 %{_sysconfdir}/xdg/autostart/software-center-tray.desktop
 
 %changelog
+* Thu Aug 13 2026 mindset <mindset@users.noreply.github.com> - 1.0.13-1
+- AppImage update kini berfungsi penuh di UI: check updates manual menyertakan
+  AppImage (sebelumnya `appimages: []` hardcoded), tombol Update per-item /
+  Update all / Update section memanggil updateAppImage() yang benar (sebelumnya
+  jatuh ke dnf upgrade dan gagal), dan versi setelah update benar (fallback ke
+  new_version hasil check saat binary baru tanpa X-AppImage-Version).
+- Uninstall AppImage kini menghapus juga preview icon cache local-icons —
+  tidak ada sisa file. Re-install mempertahankan update settings (update source/
+  URL/pattern) yang sudah diatur pengguna.
+- Filter warning log QML QQuickImage (404 ikon Flathub, issue #1) via
+  is_noise()/NoiseFilter — log bersih.
+- Requires baru untuk AppImage: unzip, 7zip, tar, coreutils, procps-ng,
+  desktop-file-utils.
+- Clippy bersih seluruh workspace.
+
 * Wed Aug 12 2026 mindset <mindset@users.noreply.github.com> - 1.0.12-1
 - Fix tab Flatpak Repositories di Settings selalu kosong ("No Flatpak remotes
   configured") padahal backend benar: assignment hasil parse ditulis sebagai
