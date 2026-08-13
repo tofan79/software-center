@@ -1052,6 +1052,161 @@ async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
 
 // ── Update install stream ─────────────────────────────────────────────────────
 
+/// Try a delta update via the external `zsync` binary. Requires the host to
+/// serve `<download_url>.zsync` with byte-range support. Returns `false` so the
+/// caller falls back to a full download instead.
+async fn try_zsync_delta(
+    app: &AppImage,
+    tmp_path: &std::path::Path,
+    download_url: &str,
+    tx: &std::sync::mpsc::Sender<String>,
+) -> bool {
+    if which_zsync().is_none() {
+        return false;
+    }
+    let seed = std::path::Path::new(&app.installed_path);
+    if !seed.exists() {
+        return false;
+    }
+
+    // Candidates for the .zsync control file. Some hosts publish it without the
+    // version/hash segment in the filename (e.g. Eden's <name>.AppImage.zsync).
+    let zsync_candidates: Vec<String> = {
+        let mut v = vec![format!("{download_url}.zsync")];
+        if let Some((dir, file)) = download_url
+            .rsplit_once('/')
+            .map(|(d, f)| (d.to_string(), f.to_string()))
+        {
+            let no_hash = Regex::new(r"-([0-9a-fA-F]{6,})")
+                .unwrap()
+                .replace_all(&file, "")
+                .to_string();
+            if no_hash != file {
+                v.push(format!("{dir}/{no_hash}.zsync"));
+            }
+        }
+        v
+    };
+
+    // The .zsync must exist and the host must serve byte ranges.
+    let client = reqwest::Client::new();
+    let mut zsync_url = None;
+    for cand in &zsync_candidates {
+        let Ok(head) = client.head(cand).send().await else { continue };
+        if !head.status().is_success() {
+            continue;
+        }
+        let ranges_ok = head
+            .headers()
+            .get("accept-ranges")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.eq_ignore_ascii_case("bytes"))
+            .unwrap_or(false);
+        if ranges_ok {
+            zsync_url = Some(cand.clone());
+            break;
+        }
+    }
+    let Some(zsync_url) = zsync_url else {
+        return false;
+    };
+
+    let local = seed.to_string_lossy().to_string();
+    let out = tmp_path.to_string_lossy().to_string();
+    let _ = tx.send(format!("Delta update via zsync: {}", zsync_url));
+
+    // zsync's own HTTP stack sometimes can't fetch the control file, so grab it
+    // ourselves and point zsync at the local copy. Range fetching of the data
+    // file itself is handled by zsync.
+    let control_path = install_dir().join(format!("{}.zsync", app.id));
+    let control = match client.get(&zsync_url).send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            let _ = std::fs::remove_file(&control_path);
+            return false;
+        }
+    };
+    match control.bytes().await {
+        Ok(b) if std::fs::write(&control_path, &b).is_ok() => {}
+        _ => {
+            let _ = std::fs::remove_file(&control_path);
+            return false;
+        }
+    }
+    let ok = run_zsync_blocking(&local, &out, &control_path.to_string_lossy(), tx);
+    let _ = std::fs::remove_file(&control_path);
+    ok
+}
+
+fn which_zsync() -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|dir| dir.join("zsync"))
+            .find(|p| p.is_file())
+    })
+}
+
+/// Run `zsync -i <local> -o <out> <control-file>`, streaming percentage lines.
+fn run_zsync_blocking(
+    local: &str,
+    out: &str,
+    control: &str,
+    tx: &std::sync::mpsc::Sender<String>,
+) -> bool {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+
+    let mut child = match Command::new("zsync")
+        .args(["-i", local, "-o", out, control])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let stderr = child.stderr.take().unwrap();
+    let tx2 = tx.clone();
+    let re = regex::Regex::new(r"(\d{1,3}(?:\.\d+)?)%").unwrap();
+    let reader = std::thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stderr);
+        let mut partial = String::new();
+        let mut chunk = [0u8; 1024];
+        let mut last = 0u32;
+        loop {
+            let n = reader.read(&mut chunk).unwrap_or_default();
+            if n == 0 {
+                break;
+            }
+            partial.push_str(&String::from_utf8_lossy(&chunk[..n]));
+            while let Some(pos) = partial.find(['\r', '\n']) {
+                let line: String = partial.drain(..=pos).collect();
+                if let Some(caps) = re.captures(&line) {
+                    if let Ok(pct) = caps[1].parse::<f64>() {
+                        let p = pct as u32;
+                        if p > last {
+                            last = p;
+                            let _ = tx2.send(format!("DOWNLOAD:{}", p));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(caps) = re.captures(&partial) {
+            if let Ok(pct) = caps[1].parse::<f64>() {
+                let p = pct as u32;
+                if p > last {
+                    let _ = tx2.send(format!("DOWNLOAD:{}", p));
+                }
+            }
+        }
+    });
+    let ok = child.wait().map(|s| s.success()).unwrap_or(false);
+    let _ = reader.join();
+    ok
+}
+
+
 /// Download and install an AppImage update. Yields status lines, last is "__done__<code>".
 /// `new_version_hint` is used when the updated binary carries no version metadata.
 pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint: &str) -> impl Iterator<Item = String> {
@@ -1088,67 +1243,76 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint
         let _ = tx.send(format!("Downloading update for {}...", name));
 
         let tmp_path = install_dir().join(format!("{}.AppImage.tmp", app_id));
-        let client = reqwest::Client::new();
-        let resp = match client.get(&download_url)
-            .header("User-Agent", "Software-Center/1.0")
-            .send().await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                let _ = tx.send(format!("Error: {}", e));
-                let _ = tx.send("__done__1".to_string());
-                return;
-            }
-        };
 
-        let total = resp.content_length().unwrap_or(0);
-        let mut downloaded: u64 = 0;
-        let mut last_pct: u64 = 0;
+        // Delta update via .zsync when available; otherwise full download.
+        let zsync_ok = try_zsync_delta(&app, &tmp_path, &download_url, &tx).await;
+        if zsync_ok {
+            let _ = tx.send("Delta update (zsync) selesai.".to_string());
+        }
 
-        let mut file = match std::fs::File::create(&tmp_path) {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = tx.send(format!("Error writing file: {}", e));
-                let _ = tx.send("__done__1".to_string());
-                return;
-            }
-        };
-
-        use futures_util::StreamExt;
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
-            let chunk = match chunk {
-                Ok(c) => c,
+        if !zsync_ok {
+            let client = reqwest::Client::new();
+            let resp = match client.get(&download_url)
+                .header("User-Agent", "Software-Center/1.0")
+                .send().await
+            {
+                Ok(r) => r,
                 Err(e) => {
-                    let _ = std::fs::remove_file(&tmp_path);
                     let _ = tx.send(format!("Error: {}", e));
                     let _ = tx.send("__done__1".to_string());
                     return;
                 }
             };
-            if let Err(e) = std::io::Write::write_all(&mut file, &chunk) {
-                let _ = std::fs::remove_file(&tmp_path);
-                let _ = tx.send(format!("Error writing file: {}", e));
-                let _ = tx.send("__done__1".to_string());
-                return;
-            }
-            downloaded += chunk.len() as u64;
-            if total > 0 {
-                let pct = downloaded
-                    .checked_mul(100)
-                    .map(|v| v / total)
-                    .unwrap_or(100)
-                    .min(100);
-                if pct > last_pct || downloaded >= total {
-                    last_pct = pct;
-                    let _ = tx.send(format!("DOWNLOAD:{}", pct));
+
+            let total = resp.content_length().unwrap_or(0);
+            let mut downloaded: u64 = 0;
+            let mut last_pct: u64 = 0;
+
+            let mut file = match std::fs::File::create(&tmp_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    let _ = tx.send(format!("Error writing file: {}", e));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+            };
+
+            use futures_util::StreamExt;
+            let mut stream = resp.bytes_stream();
+            while let Some(chunk) = stream.next().await {
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let _ = std::fs::remove_file(&tmp_path);
+                        let _ = tx.send(format!("Error: {}", e));
+                        let _ = tx.send("__done__1".to_string());
+                        return;
+                    }
+                };
+                if let Err(e) = std::io::Write::write_all(&mut file, &chunk) {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = tx.send(format!("Error writing file: {}", e));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+                downloaded += chunk.len() as u64;
+                if total > 0 {
+                    let pct = downloaded
+                        .checked_mul(100)
+                        .map(|v| v / total)
+                        .unwrap_or(100)
+                        .min(100);
+                    if pct > last_pct || downloaded >= total {
+                        last_pct = pct;
+                        let _ = tx.send(format!("DOWNLOAD:{}", pct));
+                    }
                 }
             }
+            if total == 0 {
+                let _ = tx.send("DOWNLOAD:100".to_string());
+            }
+            let _ = tx.send("Download complete.".to_string());
         }
-        if total == 0 {
-            let _ = tx.send("DOWNLOAD:100".to_string());
-        }
-        let _ = tx.send("Download complete.".to_string());
 
         // Verify the download is a real AppImage (ELF) for this machine.
         let host = host_arch();

@@ -31,6 +31,8 @@ Requires:       unzip
 Requires:       7zip
 Requires:       tar
 Requires:       coreutils
+# AppImage delta updates (.zsync). Falls back to full download when absent.
+Requires:       zsync
 # Backend helpers — dnf process detection, desktop-file cache update
 Requires:       procps-ng
 Requires:       desktop-file-utils
