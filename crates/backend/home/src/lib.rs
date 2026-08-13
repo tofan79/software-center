@@ -126,9 +126,9 @@ pub async fn load_all() -> (Vec<HomeApp>, Vec<HomeApp>, Vec<HomeApp>, Vec<HomeAp
     let a1 = appstream.clone();
     let a2 = appstream.clone();
     let (picks, updated, new) = tokio::join!(
-        async move { get_picks(&*a1).await },
-        async move { get_recently_updated(&*a2).await },
-        async move { get_new_apps(&*appstream).await },
+        async move { get_picks(&a1).await },
+        async move { get_recently_updated(&a2).await },
+        async move { get_new_apps(&appstream).await },
     );
 
     (picks, popular, updated, new)
@@ -259,7 +259,7 @@ fn cache_path(name: &str) -> PathBuf {
     cache_dir().join(name)
 }
 
-fn cache_valid(path: &PathBuf) -> bool {
+fn cache_valid(path: &std::path::Path) -> bool {
     path.metadata()
         .and_then(|m| m.modified())
         .map(|t| {

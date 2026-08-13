@@ -310,11 +310,10 @@ fn insert_pkg_meta(
     } else if entry.0.is_empty() && !icon_path.is_empty() {
         entry.0 = icon_path.to_string();
     }
-    if !display_name.is_empty() && display_name != key {
-        if entry.2.is_empty() || entry.2 == key {
+    if !display_name.is_empty() && display_name != key
+        && (entry.2.is_empty() || entry.2 == key) {
             entry.2 = display_name.to_string();
         }
-    }
 }
 
 // ── Shared cache helpers ─────────────────────────────────────────────────────

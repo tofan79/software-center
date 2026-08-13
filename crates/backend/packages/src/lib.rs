@@ -42,6 +42,7 @@ pub struct SourceOption {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct NativeApp {
     pub id: String,
     pub name: String,
@@ -264,7 +265,7 @@ pub fn get_installed() -> Result<Vec<NativeApp>> {
     for a in appstream.values() {
         if a.source == "flatpak" {
             flatpak_by_name.entry(a.name.to_lowercase()).or_insert(a);
-            let last_seg = a.id.split('.').last().unwrap_or("").to_lowercase();
+            let last_seg = a.id.split('.').next_back().unwrap_or("").to_lowercase();
             if !last_seg.is_empty() {
                 flatpak_by_name.entry(last_seg).or_insert(a);
             }
@@ -352,7 +353,7 @@ pub fn get_installed() -> Result<Vec<NativeApp>> {
         results.extend(installed_traditional_gui(&installed));
     }
 
-    results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    results.sort_by_key(|a| a.name.to_lowercase());
     let installed_rpm = get_installed_packages()?;
     let installed_fp = get_installed_flatpaks();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
@@ -749,7 +750,7 @@ pub fn get_by_category(category: &str) -> Result<Vec<NativeApp>> {
     let mut results: Vec<NativeApp> =
         merge_multi_source(raw).into_values().collect();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
-    results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    results.sort_by_key(|a| a.name.to_lowercase());
     Ok(results)
 }
 
@@ -780,7 +781,7 @@ pub fn get_by_source(source: &str) -> Result<Vec<NativeApp>> {
     let mut results: Vec<NativeApp> =
         merge_multi_source(raw).into_values().collect();
     enrich_sources(&mut results, &appstream, &installed_rpm, &installed_fp);
-    results.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    results.sort_by_key(|a| a.name.to_lowercase());
     Ok(results)
 }
 
@@ -972,9 +973,9 @@ fn merge_multi_source(apps: Vec<NativeApp>) -> HashMap<String, NativeApp> {
             sources.push(source_option_from_native_app(alt));
             // Always prefer flatpak screenshots — Flathub CDN is reliable,
             // Fedora swcatalog screenshots often have encoding/format issues.
-            if alt.source == "flatpak" && !alt.screenshots.is_empty() {
-                primary.screenshots = alt.screenshots.clone();
-            } else if primary.screenshots.is_empty() && !alt.screenshots.is_empty() {
+            if !alt.screenshots.is_empty()
+                && (alt.source == "flatpak" || primary.screenshots.is_empty())
+            {
                 primary.screenshots = alt.screenshots.clone();
             }
             if primary.description.is_empty() && !alt.description.is_empty() {
@@ -1043,7 +1044,7 @@ fn build_sources(
                     && !a.pkg_name_guessed
             }));
         if let Some(nat) = alt {
-            let nat_installed = native_is_installed(&nat.package_name, &nat.id, &installed_rpm, &desktops);
+            let nat_installed = native_is_installed(&nat.package_name, &nat.id, installed_rpm, &desktops);
                 if nat_installed || native_option_viable(&nat.package_name, installed_rpm, &repo_names) {
                 sources.push(source_option_from_app_info(nat, nat_installed, "", false));
             }
@@ -1097,7 +1098,7 @@ fn build_sources(
 /// alternate source in the full appstream cache by name and populate sources if found.
 /// This handles the case where only one source appears in a given category query.
 fn enrich_sources(
-    apps: &mut Vec<NativeApp>,
+    apps: &mut [NativeApp],
     appstream: &HashMap<String, AppInfo>,
     installed_rpm: &HashSet<String>,
     installed_fp: &HashSet<String>,
@@ -1157,7 +1158,7 @@ fn enrich_sources(
                     })
                 });
             if let Some(fp) = alt {
-                let fp_installed = fp_installed(&installed_fp, &fp.id);
+                let fp_installed = fp_installed(installed_fp, &fp.id);
                 let nat_src = source_option_from_native_app(app);
                 let fp_src = source_option_from_app_info(fp, fp_installed, "flathub", false);
                 app.sources = vec![nat_src, fp_src];
@@ -1766,40 +1767,3 @@ fn run_scenter_stream(args: &[&str]) -> impl Iterator<Item = String> {
 }
 
 // Needed for Default impl in get_installed_flatpaks_enriched
-impl Default for NativeApp {
-    fn default() -> Self {
-        NativeApp {
-            id: String::new(),
-            name: String::new(),
-            summary: String::new(),
-            description: String::new(),
-            version: String::new(),
-            package_name: String::new(),
-            icon: String::new(),
-            icon_url: String::new(),
-            icon_path: String::new(),
-            categories: Vec::new(),
-            keywords: Vec::new(),
-            screenshots: Vec::new(),
-            developer: String::new(),
-            url_homepage: String::new(),
-            url_bugtracker: String::new(),
-            url_donation: String::new(),
-            url_help: String::new(),
-            url_faq: String::new(),
-            url_vcs_browser: String::new(),
-            url_contribute: String::new(),
-            license: String::new(),
-            source: String::new(),
-            installed: false,
-            is_addon: false,
-            pkg_name_guessed: false,
-            update_source: String::new(),
-            update_url: String::new(),
-            update_pattern: String::new(),
-            updated: String::new(),
-            sources: Vec::new(),
-            remotes: Vec::new(),
-        }
-    }
-}

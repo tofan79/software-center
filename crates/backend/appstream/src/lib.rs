@@ -440,7 +440,7 @@ pub fn resolve_icon_path(app: &AppInfo, home_icon_cache: &str, dynamic_dirs: &[S
         let stem = if !app.package_name.is_empty() {
             app.package_name.as_str()
         } else {
-            clean_id.split('.').last().unwrap_or(clean_id)
+            clean_id.split('.').next_back().unwrap_or(clean_id)
         };
         if !stem.is_empty() {
             let mut search_dirs: Vec<&str> = STATIC_ICON_DIRS.to_vec();
@@ -761,7 +761,7 @@ fn parse_catalog_file(path: &Path, apps: &mut HashMap<String, AppInfo>) -> Resul
                             } else if app.package_name.is_empty() {
                                 // Native with no <pkgname> — guess from last segment of id
                                 let clean = app.id.trim_end_matches(".desktop");
-                                let guess = clean.split('.').last().unwrap_or(clean).to_lowercase();
+                                let guess = clean.split('.').next_back().unwrap_or(clean).to_lowercase();
                                 app.package_name = guess;
                                 app.pkg_name_guessed = true;
                             }

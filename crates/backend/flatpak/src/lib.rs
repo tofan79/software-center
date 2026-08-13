@@ -264,7 +264,7 @@ pub fn get_all_updates() -> Vec<FlatpakUpdate> {
             let version = cols[2].trim().to_string();
             let options = cols.get(3).unwrap_or(&"").to_lowercase();
             let runtime = options.contains("runtime");
-            let name = app_id.split('.').last().unwrap_or(&app_id).to_string();
+            let name = app_id.split('.').next_back().unwrap_or(&app_id).to_string();
             let current_version = installed.get(&app_id).cloned().unwrap_or_default();
 
             // Look up via flatpak-filtered map so the flatpak icon is always used,
@@ -651,7 +651,7 @@ pub fn get_local_flatpak_info(path: &str) -> serde_json::Value {
         }
         let app_id  = data.get("id").cloned().unwrap_or_else(|| basename_no_ext(path));
         let name    = data.get("name").cloned()
-            .unwrap_or_else(|| app_id.split('.').last().unwrap_or(&app_id).to_string());
+            .unwrap_or_else(|| app_id.split('.').next_back().unwrap_or(&app_id).to_string());
         let version = data.get("version").cloned().unwrap_or_default();
         let summary = data.get("subject").cloned().unwrap_or_default();
         let branch  = data.get("branch").cloned().unwrap_or_else(|| "stable".to_string());
@@ -718,7 +718,7 @@ pub fn get_flatpakref_info(path: &str) -> serde_json::Value {
     }
 
     let name = if title.is_empty() {
-        app_id.split('.').last().unwrap_or(&app_id).to_string()
+        app_id.split('.').next_back().unwrap_or(&app_id).to_string()
     } else {
         title
     };
@@ -920,7 +920,7 @@ fn strip_ansi(input: &[u8]) -> Vec<u8> {
             if i >= input.len() { break; }
             match input[i] {
                 b'[' => { i += 1; while i < input.len() && !input[i].is_ascii_alphabetic() { i += 1; } if i < input.len() { i += 1; } }
-                b']' => { i += 1; while i < input.len() { if input[i] == b'\x07' { i += 1; break; } if input[i] == b'\x1b' && i+1 < input.len() && input[i+1] == b'\\' { i += 2; break; } i += 1; } }
+                b']' => { i += 1; while i < input.len() { if input[i] == b'\x07' { i += 1; break; } else if input[i] == b'\x1b' && i+1 < input.len() && input[i+1] == b'\\' { i += 2; break; } i += 1; } }
                 _ => { i += 1; }
             }
         } else { out.push(input[i]); i += 1; }

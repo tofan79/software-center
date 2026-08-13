@@ -580,6 +580,19 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
 
     // Write sidecar JSON
     let now = chrono_now();
+
+    // Keep user-configured update settings when re-installing over an existing app.
+    let prev_sidecar = install_dir().join(format!("{app_id}.json"));
+    let prev: Option<AppImage> = std::fs::read_to_string(&prev_sidecar)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok());
+    let or_meta = |prev_val: &str, meta_val: &str| -> String {
+        if prev_val.is_empty() { meta_val.to_string() } else { prev_val.to_string() }
+    };
+    let prev_source = prev.as_ref().map(|p| p.update_source.as_str()).unwrap_or("");
+    let prev_url = prev.as_ref().map(|p| p.update_url.as_str()).unwrap_or("");
+    let prev_pattern = prev.as_ref().map(|p| p.update_pattern.as_str()).unwrap_or("");
+
     let app = AppImage {
         id: app_id.clone(),
         name: name.clone(),
@@ -590,10 +603,10 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         desktop_path,
         icon_path: icon_path_str,
         categories: info.categories.clone(),
-        update_source: info.update_source.clone(),
-        update_url: info.update_url.clone(),
-        update_pattern: info.update_pattern.clone(),
-        allow_prerelease: false,
+        update_source: or_meta(prev_source, &info.update_source),
+        update_url: or_meta(prev_url, &info.update_url),
+        update_pattern: or_meta(prev_pattern, &info.update_pattern),
+        allow_prerelease: prev.as_ref().map(|p| p.allow_prerelease).unwrap_or(false),
         installed_at: now,
         last_checked: String::new(),
         source: "appimage".to_string(),
@@ -625,6 +638,16 @@ pub fn uninstall(id: &str) -> (bool, String) {
     }
     if !app.icon_path.is_empty() {
         let _ = std::fs::remove_file(&app.icon_path);
+    }
+    // Drop any cached preview icon (ext unknown at this point, so scan by prefix).
+    if let Ok(entries) = std::fs::read_dir(preview_icon_dir()) {
+        let prefix = format!("{id}.");
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if fname.starts_with(&prefix) {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
     }
     let desktop = desktop_dir().join(format!("{}{}.desktop", DESKTOP_PREFIX, id));
     let _ = std::fs::remove_file(&desktop);
@@ -658,11 +681,10 @@ pub fn cleanup_orphans() -> (usize, String) {
         let is_temp = fname.ends_with(".tmp") || fname.ends_with(".part");
         let is_binary = fname.ends_with(".AppImage") || fname.ends_with(".appimage");
         let is_json = fname.ends_with(".json");
-        if is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())) {
-            if std::fs::remove_file(&path).is_ok() {
+        if (is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())))
+            && std::fs::remove_file(&path).is_ok() {
                 removed += 1;
             }
-        }
         if is_json {
             let Ok(content) = std::fs::read_to_string(&path) else { continue };
             if let Ok(app) = serde_json::from_str::<AppImage>(&content) {
@@ -885,7 +907,7 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
                 continue;
             }
             if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
-                return Some(make_result(app, new_version, &asset));
+                return Some(make_result(app, new_version, asset));
             }
         }
         return None;
@@ -896,7 +918,7 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
         return None;
     }
     let asset = pick_asset(resp["assets"].as_array()?, &pattern, &host)?;
-    Some(make_result(app, new_version, &asset))
+    Some(make_result(app, new_version, asset))
 }
 
 /// Gitea / Forgejo release API (Codeberg uses the same API).
@@ -925,7 +947,7 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
             continue;
         }
         if let Some(asset) = rel["assets"].as_array().and_then(|assets| pick_asset(assets, &pattern, &host)) {
-            return Some(make_result(app, new_version, &asset));
+            return Some(make_result(app, new_version, asset));
         }
     }
     None
@@ -1031,9 +1053,11 @@ async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
 // ── Update install stream ─────────────────────────────────────────────────────
 
 /// Download and install an AppImage update. Yields status lines, last is "__done__<code>".
-pub fn update_appimage_stream(app_id: &str, download_url: &str) -> impl Iterator<Item = String> {
+/// `new_version_hint` is used when the updated binary carries no version metadata.
+pub fn update_appimage_stream(app_id: &str, download_url: &str, new_version_hint: &str) -> impl Iterator<Item = String> {
     let app_id = app_id.to_string();
     let download_url = download_url.to_string();
+    let new_version_hint = new_version_hint.to_string();
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
@@ -1142,7 +1166,9 @@ pub fn update_appimage_stream(app_id: &str, download_url: &str) -> impl Iterator
 
         out.push("Extracting updated metadata...".to_string());
         let info = extract_appimage_info(&new_path.to_string_lossy());
-        let new_version = if info.version.is_empty() { app.version.clone() } else { info.version.clone() };
+        let new_version = if info.version.is_empty() {
+            if new_version_hint.is_empty() { app.version.clone() } else { new_version_hint.clone() }
+        } else { info.version.clone() };
 
         app.version = new_version.clone();
         app.installed_path = new_path.to_string_lossy().to_string();
@@ -1359,13 +1385,13 @@ fn chrono_now() -> String {
     let hour = s % 24; let mut days = s / 24;
     let mut year = 1970u64;
     loop {
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let dy = if leap { 366 } else { 365 };
         if days < dy { break; }
         days -= dy;
         year += 1;
     }
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
     let month_days = [31u64, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let mut month = 1u64;
     for &md in &month_days {

@@ -1,7 +1,7 @@
 %global debug_package %{nil}
 
 Name:           software-center
-Version:        1.0.12
+Version:        1.0.13
 Release:        1%{?dist}
 Summary:        Software Center — install and manage apps, Flatpaks, and system updates
 
@@ -26,6 +26,14 @@ Requires:       polkit
 Requires:       rpm
 Requires:       appstream
 Requires:       appstream-data
+# AppImage support — archive extraction, AppImage runtime, desktop-file refresh
+Requires:       unzip
+Requires:       7zip
+Requires:       tar
+Requires:       coreutils
+# Backend helpers — dnf process detection, desktop-file cache update
+Requires:       procps-ng
+Requires:       desktop-file-utils
 
 %description
 Software Center is a modern app store for Fedora and derivatives. It lets you

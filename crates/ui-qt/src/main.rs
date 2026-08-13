@@ -145,6 +145,36 @@ fn log_file() -> std::path::PathBuf {
     std::env::temp_dir().join("software-center").join("software-center.log")
 }
 
+/// Log records that are known-noise and must not pollute the app log.
+///
+/// QML image-loading failures ("Invalid image provider", 404 icon URLs) are
+/// expected: many Flatpak runtimes/theme extensions have no icon on Flathub,
+/// and `AppIcon.qml` already falls back to an initials placeholder. Nothing
+/// is actionable here, so drop them at the source instead of spamming the log.
+fn is_noise(record: &log::Record) -> bool {
+    record.args().to_string().starts_with("QML QQuickImage:")
+}
+
+/// Wrapper logger that suppresses known-noise records before they reach
+/// env_logger (and thus stderr + the persistent log file).
+struct NoiseFilter {
+    inner: Box<dyn log::Log>,
+}
+
+impl log::Log for NoiseFilter {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.inner.enabled(metadata)
+    }
+    fn log(&self, record: &log::Record) {
+        if !is_noise(record) {
+            self.inner.log(record);
+        }
+    }
+    fn flush(&self) {
+        self.inner.flush();
+    }
+}
+
 fn init_logging() {
     let path = log_file();
     if let Some(parent) = path.parent() {
@@ -155,11 +185,18 @@ fn init_logging() {
         .create(true)
         .open(&path)
         .expect("open software-center log file");
-    env_logger::Builder::new()
+    let inner = env_logger::Builder::new()
         .filter_level(log::LevelFilter::Info)
         .parse_default_env()
         .target(env_logger::Target::Pipe(Box::new(TeeWriter { file })))
-        .init();
+        .build();
+    // Match env_logger's default when RUST_LOG is set, else keep Info.
+    let max_level = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|v| v.parse::<log::LevelFilter>().ok())
+        .unwrap_or(log::LevelFilter::Info);
+    log::set_boxed_logger(Box::new(NoiseFilter { inner: Box::new(inner) })).expect("set global logger");
+    log::set_max_level(max_level);
 }
 
 fn main() {

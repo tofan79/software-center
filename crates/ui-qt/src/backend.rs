@@ -693,12 +693,24 @@ pub struct SoftwareBackend {
                 .filter_map(|f| serde_json::to_value(f).ok())
                 .collect();
 
-            let total = pkg_updates.len() + fp_updates.len();
+            // AppImage updates come from the installed sidecars (same logic as the daemon).
+            let ai_updates: Vec<serde_json::Value> = scenter_appimages::check_updates()
+                .into_iter()
+                .map(|u| serde_json::json!({
+                    "id":              u.id,
+                    "name":            u.name,
+                    "current_version": u.current_version,
+                    "new_version":     u.new_version,
+                    "download_url":    u.download_url,
+                }))
+                .collect();
+
+            let total = pkg_updates.len() + fp_updates.len() + ai_updates.len();
 
             let result = serde_json::json!({
                 "packages":        pkg_updates,
                 "flatpak":         fp_updates,
-                "appimages":       [],
+                "appimages":       ai_updates,
                 "total": total,
             });
 
@@ -854,7 +866,6 @@ pub struct SoftwareBackend {
     /// copr plugin (owner/project), system repos via config-manager.
     setRepoEnabled: qt_method!(fn setRepoEnabled(&mut self, id: QString, enabled: bool) {
         let id = id.to_string();
-        let enabled = enabled;
         log_activity(&format!("{} repository: {id}", if enabled { "Enable" } else { "Disable" }));
         self.start_op();
         let shared = self.get_shared();
@@ -1089,12 +1100,56 @@ pub struct SoftwareBackend {
         });
     }),
 
+    updateAppImage: qt_method!(fn updateAppImage(&mut self, id: QString, download_url: QString, new_version: QString) {
+        let id = id.to_string();
+        let download_url = download_url.to_string();
+        let new_version = new_version.to_string();
+        log_activity(&format!("Update AppImage: {id}"));
+        self.start_op();
+        let shared = self.get_shared();
+        std::thread::spawn(move || {
+            let _ = std::fs::write(log_path(), format!("Updating AppImage {}...\n", id));
+
+            // Fake-crawl progress while the blocking stream (download/extract) runs.
+            let shared_crawl = Arc::clone(&shared);
+            let crawl = std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                    if !shared_crawl.running.load(Ordering::Relaxed) { break; }
+                    let cur = shared_crawl.progress.load(Ordering::Relaxed);
+                    if cur < 95 { shared_crawl.progress.store((cur + 1).min(95), Ordering::Relaxed); }
+                }
+            });
+
+            let mut exit_code = 1i32;
+            for line in scenter_appimages::update_appimage_stream(&id, &download_url, &new_version) {
+                if let Some(code) = line.strip_prefix("__done__") {
+                    exit_code = code.trim().parse().unwrap_or(1);
+                } else if let Some(pct) = line.strip_prefix("DOWNLOAD:") {
+                    if let Ok(p) = pct.trim().parse::<i32>() {
+                        let cur = shared.progress.load(Ordering::Relaxed);
+                        if p > cur { shared.progress.store(p.min(95), Ordering::Relaxed); }
+                    }
+                    append_log(&line);
+                } else if !line.is_empty() {
+                    append_log(&line);
+                }
+            }
+            let ok = exit_code == 0;
+            log_activity(&format!("Update AppImage {}: {}", if ok { "OK" } else { "FAILED" }, id));
+            shared.result.store(if ok { 1 } else { 2 }, Ordering::Relaxed);
+            shared.running.store(false, Ordering::Relaxed);
+            crawl.join().ok();
+        });
+    }),
+
 
     // ── Install / Remove ─────────────────────────────────────────────────────
 
     installApp: qt_method!(fn installApp(&mut self, id: QString, source: QString, remote: QString,
                                           app_name: QString, icon_path_hint: QString, icon_url_hint: QString,
                                           user_remote: bool) {
+        #![allow(clippy::too_many_arguments)]
         let id = id.to_string();
         let source = source.to_string();
         let remote = remote.to_string();
@@ -1729,7 +1784,7 @@ fn lookup_app_info(id: &str) -> (String, String, String) {
         (app.name.clone(), app.icon_path.clone(), app.icon_url.clone())
     } else {
         // Fallback: last dot-segment of the ID as a best-guess name
-        let name = id.split('.').last().unwrap_or(id).to_string();
+        let name = id.split('.').next_back().unwrap_or(id).to_string();
         (name, String::new(), String::new())
     }
 }
@@ -1770,8 +1825,8 @@ fn parse_install_progress(line: &str) -> Option<i32> {
     }
     // "N of M" format
     if let Some(pos) = line.find(" of ") {
-        let n_str = line[..pos].trim().split_whitespace().last().unwrap_or("");
-        let m_str = line[pos + 4..].trim().split_whitespace().next().unwrap_or("");
+        let n_str = line[..pos].split_whitespace().last().unwrap_or("");
+        let m_str = line[pos + 4..].split_whitespace().next().unwrap_or("");
         if let (Ok(n), Ok(m)) = (n_str.parse::<f64>(), m_str.parse::<f64>()) {
             if m > 0.0 {
                 return Some(((n / m) * 100.0).min(100.0) as i32);

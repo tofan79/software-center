@@ -108,7 +108,23 @@ Item {
                         var co = Object.assign({}, completedUpdates);
                         if (finishedStep === "packages") co["__packages__"] = true;
                         else if (finishedStep === "flatpak") co["__flatpak__"] = true;
+                        else if (finishedStep === "appimages") {
+                            var ap = updatesPage.currentPkg;
+                            if (ap) co[ap.id || ap.app_id || ap.name || ""] = true;
+                            updatesPage.currentPkg = null;
+                        }
                         completedUpdates = co;
+                    }
+                    if (finishedStep === "appimages") {
+                        // Loop until every AppImage in the list is updated.
+                        var stillPending = updateData.appimages.some(function(p) {
+                            var id = p.id || p.app_id || p.name || "";
+                            return !completedUpdates[id];
+                        });
+                        if (stillPending && backend.opResult === 1) {
+                            _runQueueStep();
+                            return;
+                        }
                     }
                     queueStep++;
                     if (queueStep < updateQueue.length) {
@@ -152,6 +168,8 @@ Item {
                             if (p) {
                                 if (p.pkg_type === "flatpak") {
                                     backend.pruneCacheEntry("flatpak", "app_id", p.app_id || p.id || "");
+                                } else if (p.pkg_type === "appimage") {
+                                    backend.pruneCacheEntry("appimages", "id", p.id || p.app_id || "");
                                 } else {
                                     backend.pruneCacheEntry("packages", "name", p.name || "");
                                 }
@@ -399,6 +417,8 @@ Item {
             updateQueue.push("packages");
         if (updateData && updateData.flatpak && updateData.flatpak.length > 0)
             updateQueue.push("flatpak");
+        if (updateData && updateData.appimages && updateData.appimages.length > 0)
+            updateQueue.push("appimages");
         if (updateQueue.length === 0) return;
         updating = true;
         inQueueMode = true;
@@ -419,6 +439,31 @@ Item {
             currentOpLabel = "Updating Flatpak apps… (" + stepNum + "/" + total + ")";
             activeUpdateType = "flatpak";
             backend.upgradeFlatpak("__upgrade_all__", "flatpak", "");
+        } else if (step === "appimages") {
+            var remaining = updateData.appimages.filter(function(p) {
+                var id = p.id || p.app_id || p.name || "";
+                return !completedUpdates[id];
+            });
+            if (remaining.length === 0) {
+                // All AppImages done — advance to next step.
+                queueStep++;
+                if (queueStep < updateQueue.length) _runQueueStep();
+                else {
+                    inQueueMode = false;
+                    updateQueue = [];
+                    updating = false;
+                    currentOpLabel = "";
+                    activeUpdateType = "";
+                    currentPkg = null;
+                    backend.clearUpdatesCache();
+                }
+                return;
+            }
+            var item = remaining[0];
+            currentOpLabel = "Updating " + (item.name || item.id || item.app_id || "") + "… (" + stepNum + "/" + total + ")";
+            activeUpdateType = item.id || item.app_id || item.name || "";
+            currentPkg = item;
+            backend.updateAppImage(activeUpdateType, item.download_url || "", item.new_version || "");
         }
         pollTimer.start();
     }
@@ -426,21 +471,18 @@ Item {
     function _doSectionUpdate(pkgs) {
         if (updating || checking) return;
         if (!pkgs || pkgs.length === 0) return;
-        inQueueMode = false;
+        inQueueMode = true;
         pendingOpIsCheck = false;
         updating = true;
         var hasFlatpak = pkgs.some(function(p) { return p.pkg_type === "flatpak"; });
         var hasRpm     = pkgs.some(function(p) { return p.pkg_type === "rpm"; });
-        if (hasFlatpak) {
-            currentOpLabel = "Updating Flatpak apps…";
-            activeUpdateType = "flatpak";
-            backend.upgradeFlatpak("__upgrade_all__", "flatpak", "");
-        } else if (hasRpm) {
-            currentOpLabel = "Updating packages…";
-            activeUpdateType = "packages";
-            backend.upgradePackages();
-        }
-        pollTimer.start();
+        var hasAi      = pkgs.some(function(p) { return p.pkg_type === "appimage"; });
+        updateQueue = [];
+        if (hasAi)      updateQueue.push("appimages");
+        if (hasFlatpak) updateQueue.push("flatpak");
+        if (hasRpm)     updateQueue.push("packages");
+        queueStep = 0;
+        _runQueueStep();
     }
 
     // ── UpdateSection component ───────────────────────────────────────────────
@@ -677,6 +719,9 @@ Item {
                                             } else {
                                                 backend.upgradeFlatpak(pkg.app_id || pkg.id || "", "flatpak-update", "");
                                             }
+                                        } else if (pkg.pkg_type === "appimage") {
+                                            updatesPage.activeUpdateType = pkgId;
+                                            backend.updateAppImage(pkgId, pkg.download_url || "", pkg.new_version || "");
                                         } else {
                                             // Individual RPM update — only upgrade this specific package
                                             updatesPage.activeUpdateType = pkgId;
