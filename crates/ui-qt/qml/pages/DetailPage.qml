@@ -424,6 +424,36 @@ Item {
                     onRemoveClicked: backend.removeApp(app.id || "", "appimage",
                                                         app.name || "", app.icon_path || "", app.icon_url || "")
                 }
+
+                // Rollback button — appimages with a previous-version backup
+                Button {
+                    visible: app != null && app.source === "appimage" && !!app.has_backup
+                    text: "Kembali ke versi sebelumnya"
+                    enabled: !detailPage.installing
+                    onClicked: {
+                        detailPage.installing = true;
+                        backend.rollbackAppImage(app.id || "");
+                        rollbackTimer.start();
+                    }
+                }
+            }
+        }
+
+        // Reload app state once the rollback op finishes.
+        Timer {
+            id: rollbackTimer
+            interval: 300
+            repeat: true
+            onTriggered: {
+                backend.pollOp();
+                if (!backend.opRunning) {
+                    rollbackTimer.stop();
+                    detailPage.installing = false;
+                    if (detailPage.app && detailPage.app.id) {
+                        backend.loadAppById(detailPage.app.id);
+                        detailPage.detailFetchTimer.start();
+                    }
+                }
             }
         }
 
@@ -559,6 +589,16 @@ Item {
                                     text: displayApp && displayApp.version ? "v" + displayApp.version : ""
                                     font.pixelSize: 11
                                     color: root.dimText
+                                    visible: text !== ""
+                                }
+
+                                Label {
+                                    text: displayApp && displayApp.previous_version
+                                          ? "← sebelumnya v" + displayApp.previous_version
+                                          : ""
+                                    font.pixelSize: 11
+                                    color: root.dimText
+                                    opacity: 0.7
                                     visible: text !== ""
                                 }
 

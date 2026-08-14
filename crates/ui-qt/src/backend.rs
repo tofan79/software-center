@@ -418,7 +418,12 @@ pub struct SoftwareBackend {
                     }
                 }
                 for a in scenter_appimages::get_installed() {
-                    all.push(serde_json::to_value(a).unwrap_or_default());
+                    let has_backup = scenter_appimages::has_backup(&a.id);
+                    let mut v = serde_json::to_value(a).unwrap_or_default();
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("has_backup".to_string(), serde_json::json!(has_backup));
+                    }
+                    all.push(v);
                 }
 
                 let _ = std::fs::write(log_path(), serde_json::to_string(&all).unwrap_or_default());
@@ -1202,6 +1207,23 @@ pub struct SoftwareBackend {
             std::thread::spawn(move || {
                 let (_count, msg) = scenter_appimages::cleanup_orphans();
                 let _ = std::fs::write(log_path(), format!("{}\n", msg));
+                shared.result.store(1, Ordering::Relaxed);
+                shared.running.store(false, Ordering::Relaxed);
+            });
+        }
+    ),
+
+    /// Roll an AppImage back to its previous version using the `.bak` backup
+    /// kept by the last successful update. Quick local op, no root.
+    rollbackAppImage: qt_method!(
+        fn rollbackAppImage(&mut self, id: QString) {
+            let id = id.to_string();
+            log_activity(&format!("Rollback AppImage: {id}"));
+            self.start_op();
+            let shared = self.get_shared();
+            std::thread::spawn(move || {
+                let (_ok, msg) = scenter_appimages::rollback(&id);
+                let _ = std::fs::write(log_path(), format!("{msg}\n"));
                 shared.result.store(1, Ordering::Relaxed);
                 shared.running.store(false, Ordering::Relaxed);
             });

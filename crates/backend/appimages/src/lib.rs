@@ -284,6 +284,10 @@ pub struct AppImage {
     pub last_checked: String,
     pub source: String,
     pub installed: bool,
+    /// Version that `installed_path` replaced (from the `.bak`), empty when
+    /// there is no rollback backup. Used by the "rollback" feature.
+    #[serde(default)]
+    pub previous_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -962,6 +966,7 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         last_checked: String::new(),
         source: "appimage".to_string(),
         installed: true,
+        previous_version: prev.as_ref().map(|p| p.version.clone()).unwrap_or_default(),
     };
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
@@ -1005,11 +1010,96 @@ pub fn uninstall(id: &str) -> (bool, String) {
     let desktop = desktop_dir().join(format!("{}{}.desktop", DESKTOP_PREFIX, id));
     let _ = std::fs::remove_file(&desktop);
     let _ = std::fs::remove_file(&sidecar_path);
+    // Rollback backup should not survive an uninstall.
+    let _ = std::fs::remove_file(install_dir().join(format!("{id}.AppImage.bak")));
     let _ = Command::new("update-desktop-database")
         .arg(desktop_dir())
         .output();
 
     (true, format!("{} uninstalled.", app.name))
+}
+
+/// True when a rollback backup exists for the AppImage.
+pub fn has_backup(id: &str) -> bool {
+    install_dir().join(format!("{id}.AppImage.bak")).exists()
+}
+
+/// Swap the installed AppImage with its `.bak` backup and flip the sidecar's
+/// version fields, so rolling back twice returns to the newest version.
+/// Pure file/JSON logic on `dir` so it is unit-testable without touching HOME.
+fn swap_rollback(dir: &std::path::Path, id: &str) -> (bool, String) {
+    let sidecar_path = dir.join(format!("{id}.json"));
+    let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
+        return (false, format!("AppImage '{id}' not found."));
+    };
+    let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
+        return (false, "Failed to read sidecar.".to_string());
+    };
+    let new_path = dir.join(format!("{id}.AppImage"));
+    let backup_path = dir.join(format!("{id}.AppImage.bak"));
+    if !backup_path.exists() {
+        return (
+            false,
+            format!(
+                "Tidak ada backup untuk {}. Update dulu untuk membuat backup.",
+                app.name
+            ),
+        );
+    }
+    if !new_path.exists() {
+        return (
+            false,
+            format!("Installed AppImage untuk {} tidak ditemukan.", app.name),
+        );
+    }
+
+    // Swap files: installed <-> backup.
+    let tmp = dir.join(format!("{id}.AppImage.swap"));
+    if let Err(e) = std::fs::rename(&new_path, &tmp) {
+        return (false, format!("Rollback gagal: {}", e));
+    }
+    if let Err(e) = std::fs::rename(&backup_path, &new_path) {
+        let _ = std::fs::rename(&tmp, &new_path);
+        return (false, format!("Rollback gagal: {}", e));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &backup_path) {
+        let _ = std::fs::rename(&new_path, &backup_path);
+        let _ = std::fs::rename(&tmp, &new_path);
+        return (false, format!("Rollback gagal: {}", e));
+    }
+
+    // Keep it executable.
+    if let Ok(meta) = std::fs::metadata(&new_path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        let _ = std::fs::set_permissions(&new_path, perms);
+    }
+
+    // Flip version <-> previous_version.
+    let new_version = app.version.clone();
+    app.version = app.previous_version.clone();
+    app.previous_version = new_version;
+    if let Ok(json) = serde_json::to_string_pretty(&app) {
+        let _ = std::fs::write(&sidecar_path, json);
+    }
+
+    (
+        true,
+        format!(
+            "{} dikembalikan ke versi {}.",
+            app.name,
+            if app.version.is_empty() {
+                "sebelumnya"
+            } else {
+                &app.version
+            }
+        ),
+    )
+}
+
+/// Roll back an AppImage to its previous version (see `swap_rollback`).
+pub fn rollback(id: &str) -> (bool, String) {
+    swap_rollback(&install_dir(), id)
 }
 
 /// Global cleanup: remove AppImage files in the install dir that are not
@@ -1034,7 +1124,18 @@ pub fn cleanup_orphans() -> (usize, String) {
         let is_temp = fname.ends_with(".tmp") || fname.ends_with(".part");
         let is_binary = fname.ends_with(".AppImage") || fname.ends_with(".appimage");
         let is_json = fname.ends_with(".json");
+        let is_bak = fname.ends_with(".AppImage.bak");
+        let id_from_bak = fname.strip_suffix(".AppImage.bak");
         if (is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())))
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+        // A rollback backup whose sidecar is gone is orphaned.
+        if is_bak
+            && id_from_bak
+                .map(|id| !install.join(format!("{id}.json")).exists())
+                .unwrap_or(false)
             && std::fs::remove_file(&path).is_ok()
         {
             removed += 1;
@@ -1888,8 +1989,8 @@ pub fn update_appimage_stream(
             let _ = tx.send("__done__1".to_string());
             return;
         }
-        // Swapped successfully — drop the backup and any stale old file.
-        let _ = std::fs::remove_file(&backup_path);
+        // Swapped successfully — keep the backup so the user can roll back to
+        // the previous version; drop any stale old file at a different path.
         if old_path != new_path.to_string_lossy().as_ref() {
             let _ = std::fs::remove_file(&old_path);
         }
@@ -1906,6 +2007,7 @@ pub fn update_appimage_stream(
             info.version.clone()
         };
 
+        app.previous_version = app.version.clone();
         app.version = new_version.clone();
         app.installed_path = new_path.to_string_lossy().to_string();
         app.last_checked = chrono_now();
@@ -2553,6 +2655,65 @@ mod tests {
         let app2 = dir.join("NoSum.AppImage");
         std::fs::write(&app2, b"x").unwrap();
         assert_eq!(companion_checksum(&app2), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_sidecar(dir: &std::path::Path, id: &str, version: &str, prev: &str) {
+        let app = AppImage {
+            id: id.to_string(),
+            name: id.to_string(),
+            version: version.to_string(),
+            previous_version: prev.to_string(),
+            installed_path: dir
+                .join(format!("{id}.AppImage"))
+                .to_string_lossy()
+                .to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&app).unwrap();
+        std::fs::write(dir.join(format!("{id}.json")), json).unwrap();
+    }
+
+    #[test]
+    fn rollback_swaps_file_and_version_back_and_forth() {
+        let dir = std::env::temp_dir().join("sc-rollback-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let new_file = dir.join("app.AppImage");
+        let bak_file = dir.join("app.AppImage.bak");
+        std::fs::write(&new_file, b"NEW").unwrap();
+        std::fs::write(&bak_file, b"OLD").unwrap();
+        write_sidecar(&dir, "app", "2.0", "1.0");
+
+        let (ok, _) = swap_rollback(&dir, "app");
+        assert!(ok);
+        assert_eq!(std::fs::read(&new_file).unwrap(), b"OLD");
+        assert_eq!(std::fs::read(&bak_file).unwrap(), b"NEW");
+        let sidecar: AppImage =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("app.json")).unwrap()).unwrap();
+        assert_eq!(sidecar.version, "1.0");
+        assert_eq!(sidecar.previous_version, "2.0");
+        assert!(std::fs::metadata(&new_file).unwrap().permissions().mode() & 0o111 != 0);
+
+        // rollback again → back to 2.0
+        let (ok2, _) = swap_rollback(&dir, "app");
+        assert!(ok2);
+        assert_eq!(std::fs::read(&new_file).unwrap(), b"NEW");
+        let sidecar: AppImage =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("app.json")).unwrap()).unwrap();
+        assert_eq!(sidecar.version, "2.0");
+        assert_eq!(sidecar.previous_version, "1.0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rollback_fails_without_backup() {
+        let dir = std::env::temp_dir().join("sc-rollback-none");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("app.AppImage"), b"NEW").unwrap();
+        write_sidecar(&dir, "app", "2.0", "1.0");
+        let (ok, msg) = swap_rollback(&dir, "app");
+        assert!(!ok);
+        assert!(msg.contains("tidak ada") || msg.contains("backup") || msg.contains("not found"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
