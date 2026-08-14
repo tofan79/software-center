@@ -692,6 +692,20 @@ Item {
                                                 color: "white"
                                             }
                                         }
+                                        Rectangle {
+                                            visible: modelData.pkg_type === "appimage" && modelData.default_source === true
+                                            radius: 3
+                                            color: "#00695c"
+                                            width: aiAutoLbl.implicitWidth + 8
+                                            height: 16
+                                            Label {
+                                                id: aiAutoLbl
+                                                anchors.centerIn: parent
+                                                text: "auto source"
+                                                font.pixelSize: 9
+                                                color: "white"
+                                            }
+                                        }
                                     }
                                 }
 

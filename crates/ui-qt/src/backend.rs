@@ -811,6 +811,7 @@ pub struct SoftwareBackend {
                             "new_version":     u.new_version,
                             "download_url":    u.download_url,
                             "icon_path":       u.icon_path,
+                            "default_source":  u.default_source,
                         })
                     })
                     .collect();

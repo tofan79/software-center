@@ -34,6 +34,152 @@ const DESKTOP_PREFIX: &str = "sc-appimage-";
 const GITHUB_API: &str = "https://api.github.com/repos/{owner}/{repo}/releases/latest";
 const GITLAB_API: &str = "https://gitlab.com/api/v4/projects/{project}/releases";
 
+// ── Known update sources ─────────────────────────────────────────────────────
+// AppImages without X-AppImage-UpdateInformation metadata (Eden, RPCS3, …) get
+// a default source from this table so auto-check works out of the box.
+// Manual settings (save_settings) always take precedence over these defaults.
+
+/// A default update source for an AppImage that ships no update metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct KnownSource {
+    pub source: &'static str,
+    pub url: &'static str,
+    pub pattern: &'static str,
+    pub allow_prerelease: bool,
+    /// Compare release date instead of version strings. Needed for repos whose
+    /// release tag is not a version (e.g. DuckStation's `latest`, RPCS3's
+    /// `build-<hash>`).
+    pub compare_by_date: bool,
+}
+
+/// Installed AppImage id → default update source.
+pub static KNOWN_SOURCES: &[(&str, KnownSource)] = &[
+    (
+        "rpcs3",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest",
+            pattern: "rpcs3-v*_linux64.AppImage",
+            allow_prerelease: false,
+            compare_by_date: true,
+        },
+    ),
+    (
+        "eden",
+        KnownSource {
+            source: "forgejo",
+            url: "https://git.eden-emu.dev/api/v1/repos/eden-ci/nightly/releases",
+            pattern: "Eden-Linux-*-amd64-clang-pgo.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+    (
+        "duckstation",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/stenzek/duckstation/releases/latest",
+            pattern: "DuckStation-x64.AppImage",
+            allow_prerelease: false,
+            compare_by_date: true,
+        },
+    ),
+    (
+        "pcsx2",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/PCSX2/pcsx2/releases/latest",
+            pattern: "pcsx2-*-linux-appimage-x64-Qt.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+    (
+        "youwee",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/vanloctech/youwee/releases/latest",
+            pattern: "Youwee-Linux.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+];
+
+/// Look up the default source for an installed AppImage id.
+pub fn known_source_for(id: &str) -> Option<KnownSource> {
+    KNOWN_SOURCES
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, spec)| *spec)
+}
+
+/// Resolve the effective update source for an AppImage.
+/// Manual settings win; falls back to the known-sources table.
+/// Returns (update_source, update_url, update_pattern).
+pub fn resolve_source(app: &AppImage) -> (String, String, String) {
+    if !app.update_source.is_empty() && app.update_source != "none" {
+        return (
+            app.update_source.clone(),
+            app.update_url.clone(),
+            app.update_pattern.clone(),
+        );
+    }
+    match known_source_for(&app.id) {
+        Some(spec) => (
+            spec.source.to_string(),
+            spec.url.to_string(),
+            spec.pattern.to_string(),
+        ),
+        None => (
+            app.update_source.clone(),
+            app.update_url.clone(),
+            app.update_pattern.clone(),
+        ),
+    }
+}
+
+/// True when `published_at` (RFC3339) is newer than `installed_at`.
+/// An empty installed_at means "no prior record" → treat as newer.
+pub fn release_newer_than(published_at: &str, installed_at: &str) -> bool {
+    if installed_at.is_empty() {
+        return true;
+    }
+    match (rfc3339_epoch(published_at), rfc3339_epoch(installed_at)) {
+        (Some(p), Some(i)) => p > i,
+        _ => false,
+    }
+}
+
+fn rfc3339_epoch(s: &str) -> Option<i64> {
+    // Expects "YYYY-MM-DDTHH:MM:SS[.fff]Z" (what GitHub/our sidecar emit).
+    let base = s.trim_end_matches('Z');
+    let base = base.split('.').next().unwrap_or(base);
+    let (date, time) = base.split_once('T')?;
+    let mut parts = date.splitn(3, '-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    let mut tparts = time.splitn(3, ':');
+    let hh: i64 = tparts.next()?.parse().ok()?;
+    let mm: i64 = tparts.next()?.parse().ok()?;
+    let ss: i64 = tparts.next()?.parse().ok()?;
+    let days = days_from_civil(y, m, d)?;
+    Some(days * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe - 719468)
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -68,6 +214,10 @@ pub struct UpdateResult {
     pub new_version: String,
     pub download_url: String,
     pub icon_path: String,
+    /// True when this update came from the known-sources fallback
+    /// (i.e. the AppImage shipped no update metadata).
+    #[serde(default)]
+    pub default_source: bool,
 }
 
 /// Info extracted from an AppImage binary (for display / install confirmation).
@@ -991,17 +1141,68 @@ pub async fn check_update(app: &AppImage) -> Option<UpdateResult> {
 }
 
 async fn check_single_update(app: &AppImage) -> Option<UpdateResult> {
-    match app.update_source.as_str() {
-        "github" => check_github_update(app).await,
-        "gitlab" => check_gitlab_update(app).await,
-        "codeberg" => check_gitea_update(app).await,
-        "forgejo" => check_gitea_update(app).await,
-        "url" => check_url_update(app).await,
+    let (source, url, pattern) = resolve_source(app);
+    let mut effective = app.clone();
+    effective.update_source = source;
+    effective.update_url = url;
+    effective.update_pattern = pattern;
+    let used_fallback = app.update_source.is_empty() || app.update_source == "none";
+    let compare_by_date = used_fallback
+        .then(|| known_source_for(&app.id).map(|s| s.compare_by_date))
+        .flatten()
+        .unwrap_or(false);
+    let mut result = match effective.update_source.as_str() {
+        "github" => check_github_update(&effective, compare_by_date).await,
+        "gitlab" => check_gitlab_update(&effective, compare_by_date).await,
+        "codeberg" => check_gitea_update(&effective, compare_by_date).await,
+        "forgejo" => check_gitea_update(&effective, compare_by_date).await,
+        "url" => check_url_update(&effective, compare_by_date).await,
         _ => None,
+    };
+    if let Some(ref mut res) = result {
+        res.default_source = used_fallback;
+    }
+    result
+}
+
+/// Whether a release is "newer" than the installed AppImage.
+/// When `compare_by_date` is set, compare release dates instead of version
+/// strings (handles tags like `latest` / `build-<hash>`).
+fn release_is_newer(
+    app: &AppImage,
+    rel: &serde_json::Value,
+    compare_by_date: bool,
+    new_version: &str,
+) -> bool {
+    if compare_by_date {
+        release_newer_than(
+            rel["published_at"].as_str().unwrap_or(""),
+            &app.installed_at,
+        )
+    } else {
+        version_newer(new_version, &app.version)
     }
 }
 
-async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
+/// Human-readable version for a release. With `compare_by_date` we show the
+/// release date (YYYY-MM-DD) since the tag is not a version.
+fn release_version(rel: &serde_json::Value, compare_by_date: bool) -> String {
+    if compare_by_date {
+        rel["published_at"]
+            .as_str()
+            .and_then(|d| d.get(0..10))
+            .unwrap_or("")
+            .to_string()
+    } else {
+        rel["tag_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('v')
+            .to_string()
+    }
+}
+
+async fn check_github_update(app: &AppImage, compare_by_date: bool) -> Option<UpdateResult> {
     // When prereleases are allowed, walk the release list (newest first)
     // instead of `/releases/latest`, which skips prereleases entirely.
     let base = normalize_github_url(&app.update_url);
@@ -1029,12 +1230,8 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
             if rel["draft"].as_bool().unwrap_or(false) {
                 continue;
             }
-            let new_version = rel["tag_name"]
-                .as_str()
-                .unwrap_or("")
-                .trim_start_matches('v')
-                .to_string();
-            if !version_newer(&new_version, &app.version) {
+            let new_version = release_version(rel, compare_by_date);
+            if !release_is_newer(app, rel, compare_by_date, &new_version) {
                 continue;
             }
             if let Some(asset) = rel["assets"]
@@ -1047,11 +1244,8 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
         return None;
     }
 
-    let new_version = resp["tag_name"]
-        .as_str()?
-        .trim_start_matches('v')
-        .to_string();
-    if !version_newer(&new_version, &app.version) {
+    let new_version = release_version(&resp, compare_by_date);
+    if !release_is_newer(app, &resp, compare_by_date, &new_version) {
         return None;
     }
     let asset = pick_asset(resp["assets"].as_array()?, &pattern, &host)?;
@@ -1059,7 +1253,7 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
 }
 
 /// Gitea / Forgejo release API (Codeberg uses the same API).
-async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_gitea_update(app: &AppImage, compare_by_date: bool) -> Option<UpdateResult> {
     let api_url = normalize_gitea_url(&app.update_url, app.allow_prerelease);
     let resp = reqwest::Client::new()
         .get(&api_url)
@@ -1083,12 +1277,8 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
         if rel["draft"].as_bool().unwrap_or(false) {
             continue;
         }
-        let new_version = rel["tag_name"]
-            .as_str()
-            .unwrap_or("")
-            .trim_start_matches('v')
-            .to_string();
-        if !version_newer(&new_version, &app.version) {
+        let new_version = release_version(rel, compare_by_date);
+        if !release_is_newer(app, rel, compare_by_date, &new_version) {
             continue;
         }
         if let Some(asset) = rel["assets"]
@@ -1101,7 +1291,7 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
     None
 }
 
-async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_gitlab_update(app: &AppImage, _compare_by_date: bool) -> Option<UpdateResult> {
     let api_url = normalize_gitlab_url(&app.update_url);
     let releases = reqwest::Client::new()
         .get(&api_url)
@@ -1167,10 +1357,11 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
         new_version,
         download_url: asset["url"].as_str().unwrap_or("").to_string(),
         icon_path: app.icon_path.clone(),
+        default_source: false,
     })
 }
 
-async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_url_update(app: &AppImage, _compare_by_date: bool) -> Option<UpdateResult> {
     let client = reqwest::Client::new();
     let resp = client
         .head(&app.update_url)
@@ -1231,6 +1422,7 @@ async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
             new_version: "new version".to_string(),
             download_url: app.update_url.clone(),
             icon_path: app.icon_path.clone(),
+            default_source: false,
         });
     }
     None
@@ -1745,6 +1937,7 @@ fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -
             .unwrap_or("")
             .to_string(),
         icon_path: app.icon_path.clone(),
+        default_source: false,
     }
 }
 
@@ -1991,5 +2184,113 @@ mod tests {
         assert!(name_matches_arch("app-1.0-aarch64.AppImage", "aarch64"));
         assert!(!name_matches_arch("app-1.0-x86_64.AppImage", "aarch64"));
         assert!(name_matches_arch("app-1.0.AppImage", "x86_64"));
+    }
+
+    #[test]
+    fn known_source_resolves_popular_apps() {
+        for id in ["rpcs3", "eden", "duckstation", "pcsx2", "youwee"] {
+            assert!(
+                known_source_for(id).is_some(),
+                "expected known source for {id}"
+            );
+        }
+        assert!(known_source_for("unknown-app").is_none());
+    }
+
+    #[test]
+    fn known_source_specs_are_well_formed() {
+        for (id, spec) in KNOWN_SOURCES {
+            assert!(!spec.source.is_empty(), "{id}: source");
+            assert!(!spec.url.is_empty(), "{id}: url");
+            assert!(!spec.pattern.is_empty(), "{id}: pattern");
+            assert!(
+                glob_to_regex(spec.pattern).as_str() != "(?-i)^$",
+                "{id}: bad glob"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_source_prefers_manual_over_known() {
+        let app = AppImage {
+            id: "rpcs3".to_string(),
+            update_source: "github".to_string(),
+            update_url: "https://api.github.com/repos/user/own/releases/latest".to_string(),
+            update_pattern: "mine-*.AppImage".to_string(),
+            ..Default::default()
+        };
+        let (src, url, pat) = resolve_source(&app);
+        assert_eq!(src, "github");
+        assert_eq!(url, "https://api.github.com/repos/user/own/releases/latest");
+        assert_eq!(pat, "mine-*.AppImage");
+    }
+
+    #[test]
+    fn resolve_source_falls_back_to_known_when_none() {
+        let mut app = AppImage {
+            id: "duckstation".to_string(),
+            ..Default::default()
+        };
+        app.update_source = "none".to_string();
+        let (src, url, pat) = resolve_source(&app);
+        assert_eq!(src, "github");
+        assert_eq!(
+            url,
+            "https://api.github.com/repos/stenzek/duckstation/releases/latest"
+        );
+        assert_eq!(pat, "DuckStation-x64.AppImage");
+    }
+
+    #[test]
+    fn compare_by_date_detects_newer_release() {
+        // installed 2026-01-01, release 2026-02-01 → newer
+        assert!(release_newer_than(
+            "2026-02-01T10:00:00Z",
+            "2026-01-01T00:00:00Z"
+        ));
+        // release older → not newer
+        assert!(!release_newer_than(
+            "2025-12-01T10:00:00Z",
+            "2026-01-01T00:00:00Z"
+        ));
+        // empty installed_at → treat as newer (no prior record)
+        assert!(release_newer_than("2026-02-01T10:00:00Z", ""));
+        // identical date → not newer
+        assert!(!release_newer_than(
+            "2026-02-01T10:00:00Z",
+            "2026-02-01T10:00:00Z"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_known_source_rpcs3_by_date() {
+        let app = AppImage {
+            id: "rpcs3".to_string(),
+            version: "0.0.18".to_string(),
+            installed_at: "2026-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let res = check_update(&app).await.expect("expected RPCS3 update");
+        assert_eq!(res.id, "rpcs3");
+        assert!(res.download_url.contains("AppImage"));
+        println!("RPCS3 -> {} ({})", res.new_version, res.download_url);
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_known_source_duckstation_by_date() {
+        let app = AppImage {
+            id: "duckstation".to_string(),
+            version: "0.1".to_string(),
+            installed_at: "2026-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let res = check_update(&app)
+            .await
+            .expect("expected DuckStation update");
+        assert_eq!(res.id, "duckstation");
+        assert!(res.download_url.contains("AppImage"));
+        println!("DuckStation -> {} ({})", res.new_version, res.download_url);
     }
 }
