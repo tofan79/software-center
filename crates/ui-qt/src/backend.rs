@@ -418,7 +418,12 @@ pub struct SoftwareBackend {
                     }
                 }
                 for a in scenter_appimages::get_installed() {
-                    all.push(serde_json::to_value(a).unwrap_or_default());
+                    let has_backup = scenter_appimages::has_backup(&a.id);
+                    let mut v = serde_json::to_value(a).unwrap_or_default();
+                    if let Some(obj) = v.as_object_mut() {
+                        obj.insert("has_backup".to_string(), serde_json::json!(has_backup));
+                    }
+                    all.push(v);
                 }
 
                 let _ = std::fs::write(log_path(), serde_json::to_string(&all).unwrap_or_default());
@@ -811,6 +816,8 @@ pub struct SoftwareBackend {
                             "new_version":     u.new_version,
                             "download_url":    u.download_url,
                             "icon_path":       u.icon_path,
+                            "default_source":  u.default_source,
+                            "checksum":        u.checksum,
                         })
                     })
                     .collect();
@@ -1206,6 +1213,23 @@ pub struct SoftwareBackend {
         }
     ),
 
+    /// Roll an AppImage back to its previous version using the `.bak` backup
+    /// kept by the last successful update. Quick local op, no root.
+    rollbackAppImage: qt_method!(
+        fn rollbackAppImage(&mut self, id: QString) {
+            let id = id.to_string();
+            log_activity(&format!("Rollback AppImage: {id}"));
+            self.start_op();
+            let shared = self.get_shared();
+            std::thread::spawn(move || {
+                let (_ok, msg) = scenter_appimages::rollback(&id);
+                let _ = std::fs::write(log_path(), format!("{msg}\n"));
+                shared.result.store(1, Ordering::Relaxed);
+                shared.running.store(false, Ordering::Relaxed);
+            });
+        }
+    ),
+
     // Update a Flatpak from the Updates page WITHOUT entering the install/remove
     // queue. Mirrors installApp's flatpak commands but runs as a plain streaming
     // op (like upgradePackage), so flatpak updates show inline progress on the
@@ -1310,10 +1334,17 @@ pub struct SoftwareBackend {
     ),
 
     updateAppImage: qt_method!(
-        fn updateAppImage(&mut self, id: QString, download_url: QString, new_version: QString) {
+        fn updateAppImage(
+            &mut self,
+            id: QString,
+            download_url: QString,
+            new_version: QString,
+            checksum: QString,
+        ) {
             let id = id.to_string();
             let download_url = download_url.to_string();
             let new_version = new_version.to_string();
+            let checksum = checksum.to_string();
             log_activity(&format!("Update AppImage: {id}"));
             self.start_op();
             let shared = self.get_shared();
@@ -1321,9 +1352,12 @@ pub struct SoftwareBackend {
                 let _ = std::fs::write(log_path(), format!("Updating AppImage {}...\n", id));
 
                 let mut exit_code = 1i32;
-                for line in
-                    scenter_appimages::update_appimage_stream(&id, &download_url, &new_version)
-                {
+                for line in scenter_appimages::update_appimage_stream(
+                    &id,
+                    &download_url,
+                    &new_version,
+                    &checksum,
+                ) {
                     if let Some(code) = line.strip_prefix("__done__") {
                         exit_code = code.trim().parse().unwrap_or(1);
                     } else if let Some(pct) = line.strip_prefix("DOWNLOAD:") {

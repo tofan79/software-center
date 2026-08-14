@@ -463,7 +463,7 @@ Item {
             currentOpLabel = "Updating " + (item.name || item.id || item.app_id || "") + "… (" + stepNum + "/" + total + ")";
             activeUpdateType = item.id || item.app_id || item.name || "";
             currentPkg = item;
-            backend.updateAppImage(activeUpdateType, item.download_url || "", item.new_version || "");
+            backend.updateAppImage(activeUpdateType, item.download_url || "", item.new_version || "", item.checksum || "");
         }
         pollTimer.start();
     }
@@ -692,6 +692,20 @@ Item {
                                                 color: "white"
                                             }
                                         }
+                                        Rectangle {
+                                            visible: modelData.pkg_type === "appimage" && modelData.default_source === true
+                                            radius: 3
+                                            color: "#00695c"
+                                            width: aiAutoLbl.implicitWidth + 8
+                                            height: 16
+                                            Label {
+                                                id: aiAutoLbl
+                                                anchors.centerIn: parent
+                                                text: "auto source"
+                                                font.pixelSize: 9
+                                                color: "white"
+                                            }
+                                        }
                                     }
                                 }
 
@@ -721,7 +735,7 @@ Item {
                                             }
                                         } else if (pkg.pkg_type === "appimage") {
                                             updatesPage.activeUpdateType = pkgId;
-                                            backend.updateAppImage(pkgId, pkg.download_url || "", pkg.new_version || "");
+                                            backend.updateAppImage(pkgId, pkg.download_url || "", pkg.new_version || "", pkg.checksum || "");
                                         } else {
                                             // Individual RPM update — only upgrade this specific package
                                             updatesPage.activeUpdateType = pkgId;

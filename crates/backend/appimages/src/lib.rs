@@ -34,7 +34,233 @@ const DESKTOP_PREFIX: &str = "sc-appimage-";
 const GITHUB_API: &str = "https://api.github.com/repos/{owner}/{repo}/releases/latest";
 const GITLAB_API: &str = "https://gitlab.com/api/v4/projects/{project}/releases";
 
+// ── Known update sources ─────────────────────────────────────────────────────
+// AppImages without X-AppImage-UpdateInformation metadata (Eden, RPCS3, …) get
+// a default source from this table so auto-check works out of the box.
+// Manual settings (save_settings) always take precedence over these defaults.
+
+/// A default update source for an AppImage that ships no update metadata.
+#[derive(Debug, Clone, Copy)]
+pub struct KnownSource {
+    pub source: &'static str,
+    pub url: &'static str,
+    pub pattern: &'static str,
+    pub allow_prerelease: bool,
+    /// Compare release date instead of version strings. Needed for repos whose
+    /// release tag is not a version (e.g. DuckStation's `latest`, RPCS3's
+    /// `build-<hash>`).
+    pub compare_by_date: bool,
+}
+
+/// Installed AppImage id → default update source.
+pub static KNOWN_SOURCES: &[(&str, KnownSource)] = &[
+    (
+        "rpcs3",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/RPCS3/rpcs3-binaries-linux/releases/latest",
+            pattern: "rpcs3-v*_linux64.AppImage",
+            allow_prerelease: false,
+            compare_by_date: true,
+        },
+    ),
+    (
+        "eden",
+        KnownSource {
+            source: "forgejo",
+            url: "https://git.eden-emu.dev/api/v1/repos/eden-ci/nightly/releases",
+            pattern: "Eden-Linux-*-amd64-clang-pgo.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+    (
+        "duckstation",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/stenzek/duckstation/releases/latest",
+            pattern: "DuckStation-x64.AppImage",
+            allow_prerelease: false,
+            compare_by_date: true,
+        },
+    ),
+    (
+        "pcsx2",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/PCSX2/pcsx2/releases/latest",
+            pattern: "pcsx2-*-linux-appimage-x64-Qt.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+    (
+        "youwee",
+        KnownSource {
+            source: "github",
+            url: "https://api.github.com/repos/vanloctech/youwee/releases/latest",
+            pattern: "Youwee-Linux.AppImage",
+            allow_prerelease: false,
+            compare_by_date: false,
+        },
+    ),
+];
+
+/// Look up the default source for an installed AppImage id.
+pub fn known_source_for(id: &str) -> Option<KnownSource> {
+    KNOWN_SOURCES
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, spec)| *spec)
+}
+
+/// Resolve the effective update source for an AppImage.
+/// Manual settings win; falls back to the known-sources table.
+/// Returns (update_source, update_url, update_pattern).
+pub fn resolve_source(app: &AppImage) -> (String, String, String) {
+    if !app.update_source.is_empty() && app.update_source != "none" {
+        return (
+            app.update_source.clone(),
+            app.update_url.clone(),
+            app.update_pattern.clone(),
+        );
+    }
+    match known_source_for(&app.id) {
+        Some(spec) => (
+            spec.source.to_string(),
+            spec.url.to_string(),
+            spec.pattern.to_string(),
+        ),
+        None => (
+            app.update_source.clone(),
+            app.update_url.clone(),
+            app.update_pattern.clone(),
+        ),
+    }
+}
+
+/// True when `published_at` (RFC3339) is newer than `installed_at`.
+/// An empty installed_at means "no prior record" → treat as newer.
+pub fn release_newer_than(published_at: &str, installed_at: &str) -> bool {
+    if installed_at.is_empty() {
+        return true;
+    }
+    match (rfc3339_epoch(published_at), rfc3339_epoch(installed_at)) {
+        (Some(p), Some(i)) => p > i,
+        _ => false,
+    }
+}
+
+fn rfc3339_epoch(s: &str) -> Option<i64> {
+    // Expects "YYYY-MM-DDTHH:MM:SS[.fff]Z" (what GitHub/our sidecar emit).
+    let base = s.trim_end_matches('Z');
+    let base = base.split('.').next().unwrap_or(base);
+    let (date, time) = base.split_once('T')?;
+    let mut parts = date.splitn(3, '-');
+    let y: i64 = parts.next()?.parse().ok()?;
+    let m: i64 = parts.next()?.parse().ok()?;
+    let d: i64 = parts.next()?.parse().ok()?;
+    let mut tparts = time.splitn(3, ':');
+    let hh: i64 = tparts.next()?.parse().ok()?;
+    let mm: i64 = tparts.next()?.parse().ok()?;
+    let ss: i64 = tparts.next()?.parse().ok()?;
+    let days = days_from_civil(y, m, d)?;
+    Some(days * 86400 + hh * 3600 + mm * 60 + ss)
+}
+
+fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146097 + doe - 719468)
+}
+
 // ── Data types ────────────────────────────────────────────────────────────────
+
+// ── Checksum helpers ──────────────────────────────────────────────────────────
+
+/// Extract a SHA256 from a release body. Supports the formats seen in the
+/// wild:
+/// - `hash` alone
+/// - `hash;size` (RPCS3)
+/// - `hash  name` / `hash *name` (coreutils/BSD sha256sum)
+///
+/// When a filename is present it must match `target`.
+pub fn parse_sha256_body(body: &str, target: &str) -> Option<String> {
+    let re = Regex::new(r"(?i)([0-9a-f]{64})").ok()?;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let caps = re.captures(line)?;
+        let hash = caps[1].to_ascii_lowercase();
+        let rest = line.replace(&caps[1], "");
+        let rest = rest.trim();
+        if rest.is_empty() || rest.starts_with(';') {
+            // bare hash, or `hash;size` (RPCS3) → treat as the target's checksum
+            return Some(hash);
+        }
+        // `hash  name` or `hash *name` — verify the name matches target
+        let name = rest.trim_start_matches([' ', '*', '\t']).to_string();
+        if name == target {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Compute the lowercase hex SHA256 of a file.
+pub fn sha256_hex_of_file(path: &std::path::Path) -> anyhow::Result<String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = [0u8; 65536];
+    let mut hasher = sha2::Sha256::new();
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Case-insensitive SHA256 comparison; empty expected → "no checksum" → false.
+pub fn verify_sha256(expected: &str, actual: &str) -> bool {
+    !expected.is_empty() && expected.eq_ignore_ascii_case(actual)
+}
+
+/// Look for a `<file>.sha256` / `<file>.sha256sum` sibling next to a local
+/// AppImage and return the expected SHA256 for that file, if published.
+pub fn companion_checksum(src: &std::path::Path) -> Option<String> {
+    let name = src.file_name()?.to_str()?;
+    let dir = src.parent()?;
+    let mut candidates = vec![
+        dir.join(format!("{name}.sha256")),
+        dir.join(format!("{name}.sha256sum")),
+        dir.join(format!("{name}.SHA256SUMS")),
+    ];
+    // also `<stem>.sha256`
+    if let Some(stem) = src.file_stem().and_then(|s| s.to_str()) {
+        candidates.push(dir.join(format!("{stem}.sha256")));
+    }
+    for c in candidates {
+        let Ok(content) = std::fs::read_to_string(&c) else {
+            continue;
+        };
+        if let Some(h) = parse_sha256_body(&content, name) {
+            return Some(h);
+        }
+    }
+    None
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppImage {
@@ -58,6 +284,10 @@ pub struct AppImage {
     pub last_checked: String,
     pub source: String,
     pub installed: bool,
+    /// Version that `installed_path` replaced (from the `.bak`), empty when
+    /// there is no rollback backup. Used by the "rollback" feature.
+    #[serde(default)]
+    pub previous_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -68,6 +298,13 @@ pub struct UpdateResult {
     pub new_version: String,
     pub download_url: String,
     pub icon_path: String,
+    /// True when this update came from the known-sources fallback
+    /// (i.e. the AppImage shipped no update metadata).
+    #[serde(default)]
+    pub default_source: bool,
+    /// Optional SHA256 of the update, when the release publishes one.
+    #[serde(default)]
+    pub checksum: String,
 }
 
 /// Info extracted from an AppImage binary (for display / install confirmation).
@@ -608,6 +845,24 @@ pub fn install_appimage(src_path: &str) -> (bool, String, Option<AppImage>) {
 }
 
 fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
+    // Verify checksum before installing when a `.sha256` sibling is present.
+    if let Some(expected) = companion_checksum(src) {
+        match sha256_hex_of_file(src) {
+            Ok(actual) if verify_sha256(&expected, &actual) => {}
+            Ok(actual) => {
+                return (
+                    false,
+                    format!(
+                        "SHA256 mismatch! expected {}, got {}. Install dibatalkan.",
+                        expected, actual
+                    ),
+                    None,
+                )
+            }
+            Err(e) => return (false, format!("Error computing SHA256: {}", e), None),
+        }
+    }
+
     // Ensure directories
     for dir in &[install_dir(), icon_dir(), desktop_dir()] {
         if let Err(e) = std::fs::create_dir_all(dir) {
@@ -711,6 +966,7 @@ fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
         last_checked: String::new(),
         source: "appimage".to_string(),
         installed: true,
+        previous_version: prev.as_ref().map(|p| p.version.clone()).unwrap_or_default(),
     };
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
@@ -754,11 +1010,96 @@ pub fn uninstall(id: &str) -> (bool, String) {
     let desktop = desktop_dir().join(format!("{}{}.desktop", DESKTOP_PREFIX, id));
     let _ = std::fs::remove_file(&desktop);
     let _ = std::fs::remove_file(&sidecar_path);
+    // Rollback backup should not survive an uninstall.
+    let _ = std::fs::remove_file(install_dir().join(format!("{id}.AppImage.bak")));
     let _ = Command::new("update-desktop-database")
         .arg(desktop_dir())
         .output();
 
     (true, format!("{} uninstalled.", app.name))
+}
+
+/// True when a rollback backup exists for the AppImage.
+pub fn has_backup(id: &str) -> bool {
+    install_dir().join(format!("{id}.AppImage.bak")).exists()
+}
+
+/// Swap the installed AppImage with its `.bak` backup and flip the sidecar's
+/// version fields, so rolling back twice returns to the newest version.
+/// Pure file/JSON logic on `dir` so it is unit-testable without touching HOME.
+fn swap_rollback(dir: &std::path::Path, id: &str) -> (bool, String) {
+    let sidecar_path = dir.join(format!("{id}.json"));
+    let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
+        return (false, format!("AppImage '{id}' not found."));
+    };
+    let Ok(mut app) = serde_json::from_str::<AppImage>(&content) else {
+        return (false, "Failed to read sidecar.".to_string());
+    };
+    let new_path = dir.join(format!("{id}.AppImage"));
+    let backup_path = dir.join(format!("{id}.AppImage.bak"));
+    if !backup_path.exists() {
+        return (
+            false,
+            format!(
+                "Tidak ada backup untuk {}. Update dulu untuk membuat backup.",
+                app.name
+            ),
+        );
+    }
+    if !new_path.exists() {
+        return (
+            false,
+            format!("Installed AppImage untuk {} tidak ditemukan.", app.name),
+        );
+    }
+
+    // Swap files: installed <-> backup.
+    let tmp = dir.join(format!("{id}.AppImage.swap"));
+    if let Err(e) = std::fs::rename(&new_path, &tmp) {
+        return (false, format!("Rollback gagal: {}", e));
+    }
+    if let Err(e) = std::fs::rename(&backup_path, &new_path) {
+        let _ = std::fs::rename(&tmp, &new_path);
+        return (false, format!("Rollback gagal: {}", e));
+    }
+    if let Err(e) = std::fs::rename(&tmp, &backup_path) {
+        let _ = std::fs::rename(&new_path, &backup_path);
+        let _ = std::fs::rename(&tmp, &new_path);
+        return (false, format!("Rollback gagal: {}", e));
+    }
+
+    // Keep it executable.
+    if let Ok(meta) = std::fs::metadata(&new_path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        let _ = std::fs::set_permissions(&new_path, perms);
+    }
+
+    // Flip version <-> previous_version.
+    let new_version = app.version.clone();
+    app.version = app.previous_version.clone();
+    app.previous_version = new_version;
+    if let Ok(json) = serde_json::to_string_pretty(&app) {
+        let _ = std::fs::write(&sidecar_path, json);
+    }
+
+    (
+        true,
+        format!(
+            "{} dikembalikan ke versi {}.",
+            app.name,
+            if app.version.is_empty() {
+                "sebelumnya"
+            } else {
+                &app.version
+            }
+        ),
+    )
+}
+
+/// Roll back an AppImage to its previous version (see `swap_rollback`).
+pub fn rollback(id: &str) -> (bool, String) {
+    swap_rollback(&install_dir(), id)
 }
 
 /// Global cleanup: remove AppImage files in the install dir that are not
@@ -783,7 +1124,18 @@ pub fn cleanup_orphans() -> (usize, String) {
         let is_temp = fname.ends_with(".tmp") || fname.ends_with(".part");
         let is_binary = fname.ends_with(".AppImage") || fname.ends_with(".appimage");
         let is_json = fname.ends_with(".json");
+        let is_bak = fname.ends_with(".AppImage.bak");
+        let id_from_bak = fname.strip_suffix(".AppImage.bak");
         if (is_temp || (is_binary && !referenced.contains(&path.to_string_lossy().to_string())))
+            && std::fs::remove_file(&path).is_ok()
+        {
+            removed += 1;
+        }
+        // A rollback backup whose sidecar is gone is orphaned.
+        if is_bak
+            && id_from_bak
+                .map(|id| !install.join(format!("{id}.json")).exists())
+                .unwrap_or(false)
             && std::fs::remove_file(&path).is_ok()
         {
             removed += 1;
@@ -991,17 +1343,68 @@ pub async fn check_update(app: &AppImage) -> Option<UpdateResult> {
 }
 
 async fn check_single_update(app: &AppImage) -> Option<UpdateResult> {
-    match app.update_source.as_str() {
-        "github" => check_github_update(app).await,
-        "gitlab" => check_gitlab_update(app).await,
-        "codeberg" => check_gitea_update(app).await,
-        "forgejo" => check_gitea_update(app).await,
-        "url" => check_url_update(app).await,
+    let (source, url, pattern) = resolve_source(app);
+    let mut effective = app.clone();
+    effective.update_source = source;
+    effective.update_url = url;
+    effective.update_pattern = pattern;
+    let used_fallback = app.update_source.is_empty() || app.update_source == "none";
+    let compare_by_date = used_fallback
+        .then(|| known_source_for(&app.id).map(|s| s.compare_by_date))
+        .flatten()
+        .unwrap_or(false);
+    let mut result = match effective.update_source.as_str() {
+        "github" => check_github_update(&effective, compare_by_date).await,
+        "gitlab" => check_gitlab_update(&effective, compare_by_date).await,
+        "codeberg" => check_gitea_update(&effective, compare_by_date).await,
+        "forgejo" => check_gitea_update(&effective, compare_by_date).await,
+        "url" => check_url_update(&effective, compare_by_date).await,
         _ => None,
+    };
+    if let Some(ref mut res) = result {
+        res.default_source = used_fallback;
+    }
+    result
+}
+
+/// Whether a release is "newer" than the installed AppImage.
+/// When `compare_by_date` is set, compare release dates instead of version
+/// strings (handles tags like `latest` / `build-<hash>`).
+fn release_is_newer(
+    app: &AppImage,
+    rel: &serde_json::Value,
+    compare_by_date: bool,
+    new_version: &str,
+) -> bool {
+    if compare_by_date {
+        release_newer_than(
+            rel["published_at"].as_str().unwrap_or(""),
+            &app.installed_at,
+        )
+    } else {
+        version_newer(new_version, &app.version)
     }
 }
 
-async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
+/// Human-readable version for a release. With `compare_by_date` we show the
+/// release date (YYYY-MM-DD) since the tag is not a version.
+fn release_version(rel: &serde_json::Value, compare_by_date: bool) -> String {
+    if compare_by_date {
+        rel["published_at"]
+            .as_str()
+            .and_then(|d| d.get(0..10))
+            .unwrap_or("")
+            .to_string()
+    } else {
+        rel["tag_name"]
+            .as_str()
+            .unwrap_or("")
+            .trim_start_matches('v')
+            .to_string()
+    }
+}
+
+async fn check_github_update(app: &AppImage, compare_by_date: bool) -> Option<UpdateResult> {
     // When prereleases are allowed, walk the release list (newest first)
     // instead of `/releases/latest`, which skips prereleases entirely.
     let base = normalize_github_url(&app.update_url);
@@ -1029,37 +1432,32 @@ async fn check_github_update(app: &AppImage) -> Option<UpdateResult> {
             if rel["draft"].as_bool().unwrap_or(false) {
                 continue;
             }
-            let new_version = rel["tag_name"]
-                .as_str()
-                .unwrap_or("")
-                .trim_start_matches('v')
-                .to_string();
-            if !version_newer(&new_version, &app.version) {
+            let new_version = release_version(rel, compare_by_date);
+            if !release_is_newer(app, rel, compare_by_date, &new_version) {
                 continue;
             }
             if let Some(asset) = rel["assets"]
                 .as_array()
                 .and_then(|assets| pick_asset(assets, &pattern, &host))
             {
-                return Some(make_result(app, new_version, asset));
+                let checksum = release_checksum(rel, asset).await;
+                return Some(make_result(app, new_version, asset, &checksum));
             }
         }
         return None;
     }
 
-    let new_version = resp["tag_name"]
-        .as_str()?
-        .trim_start_matches('v')
-        .to_string();
-    if !version_newer(&new_version, &app.version) {
+    let new_version = release_version(&resp, compare_by_date);
+    if !release_is_newer(app, &resp, compare_by_date, &new_version) {
         return None;
     }
     let asset = pick_asset(resp["assets"].as_array()?, &pattern, &host)?;
-    Some(make_result(app, new_version, asset))
+    let checksum = release_checksum(&resp, asset).await;
+    Some(make_result(app, new_version, asset, &checksum))
 }
 
 /// Gitea / Forgejo release API (Codeberg uses the same API).
-async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_gitea_update(app: &AppImage, compare_by_date: bool) -> Option<UpdateResult> {
     let api_url = normalize_gitea_url(&app.update_url, app.allow_prerelease);
     let resp = reqwest::Client::new()
         .get(&api_url)
@@ -1083,25 +1481,22 @@ async fn check_gitea_update(app: &AppImage) -> Option<UpdateResult> {
         if rel["draft"].as_bool().unwrap_or(false) {
             continue;
         }
-        let new_version = rel["tag_name"]
-            .as_str()
-            .unwrap_or("")
-            .trim_start_matches('v')
-            .to_string();
-        if !version_newer(&new_version, &app.version) {
+        let new_version = release_version(rel, compare_by_date);
+        if !release_is_newer(app, rel, compare_by_date, &new_version) {
             continue;
         }
         if let Some(asset) = rel["assets"]
             .as_array()
             .and_then(|assets| pick_asset(assets, &pattern, &host))
         {
-            return Some(make_result(app, new_version, asset));
+            let checksum = release_checksum(rel, asset).await;
+            return Some(make_result(app, new_version, asset, &checksum));
         }
     }
     None
 }
 
-async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_gitlab_update(app: &AppImage, _compare_by_date: bool) -> Option<UpdateResult> {
     let api_url = normalize_gitlab_url(&app.update_url);
     let releases = reqwest::Client::new()
         .get(&api_url)
@@ -1167,10 +1562,12 @@ async fn check_gitlab_update(app: &AppImage) -> Option<UpdateResult> {
         new_version,
         download_url: asset["url"].as_str().unwrap_or("").to_string(),
         icon_path: app.icon_path.clone(),
+        default_source: false,
+        checksum: String::new(),
     })
 }
 
-async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
+async fn check_url_update(app: &AppImage, _compare_by_date: bool) -> Option<UpdateResult> {
     let client = reqwest::Client::new();
     let resp = client
         .head(&app.update_url)
@@ -1231,6 +1628,8 @@ async fn check_url_update(app: &AppImage) -> Option<UpdateResult> {
             new_version: "new version".to_string(),
             download_url: app.update_url.clone(),
             icon_path: app.icon_path.clone(),
+            default_source: false,
+            checksum: String::new(),
         });
     }
     None
@@ -1400,10 +1799,12 @@ pub fn update_appimage_stream(
     app_id: &str,
     download_url: &str,
     new_version_hint: &str,
+    checksum: &str,
 ) -> impl Iterator<Item = String> {
     let app_id = app_id.to_string();
     let download_url = download_url.to_string();
     let new_version_hint = new_version_hint.to_string();
+    let checksum = checksum.to_string();
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
@@ -1527,6 +1928,32 @@ pub fn update_appimage_stream(
             host
         ));
 
+        // Verify SHA256 against the release's published checksum, when one is
+        // known. Mismatch aborts before we touch the installed binary;
+        // no published checksum → proceed (fallback).
+        if !checksum.is_empty() {
+            let _ = tx.send("Verifying SHA256 checksum...".to_string());
+            match sha256_hex_of_file(&tmp_path) {
+                Ok(actual) if verify_sha256(&checksum, &actual) => {
+                    let _ = tx.send("Checksum OK.".to_string());
+                }
+                Ok(actual) => {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = tx.send(format!(
+                        "Error: SHA256 mismatch! expected {}, got {}. Update dibatalkan.",
+                        checksum, actual
+                    ));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(format!("Error computing SHA256: {}", e));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+            }
+        }
+
         // Atomic replace with a backup so we can roll back on failure.
         let new_path = install_dir().join(format!("{}.AppImage", app_id));
         let backup_path = install_dir().join(format!("{}.AppImage.bak", app_id));
@@ -1562,8 +1989,8 @@ pub fn update_appimage_stream(
             let _ = tx.send("__done__1".to_string());
             return;
         }
-        // Swapped successfully — drop the backup and any stale old file.
-        let _ = std::fs::remove_file(&backup_path);
+        // Swapped successfully — keep the backup so the user can roll back to
+        // the previous version; drop any stale old file at a different path.
         if old_path != new_path.to_string_lossy().as_ref() {
             let _ = std::fs::remove_file(&old_path);
         }
@@ -1580,6 +2007,7 @@ pub fn update_appimage_stream(
             info.version.clone()
         };
 
+        app.previous_version = app.version.clone();
         app.version = new_version.clone();
         app.installed_path = new_path.to_string_lossy().to_string();
         app.last_checked = chrono_now();
@@ -1734,7 +2162,12 @@ fn pick_asset<'a>(
         .or_else(|| matching.first().copied())
 }
 
-fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -> UpdateResult {
+fn make_result(
+    app: &AppImage,
+    new_version: String,
+    asset: &serde_json::Value,
+    checksum: &str,
+) -> UpdateResult {
     UpdateResult {
         id: app.id.clone(),
         name: app.name.clone(),
@@ -1745,7 +2178,48 @@ fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -
             .unwrap_or("")
             .to_string(),
         icon_path: app.icon_path.clone(),
+        default_source: false,
+        checksum: checksum.to_string(),
     }
+}
+
+/// Extract a SHA256 checksum for `asset` from a release. Checks, in order:
+/// 1. checksum content embedded in the release body (RPCS3's `hash;size`, etc.)
+/// 2. a companion `*.sha256` / `.sha256sum` / `.SHA256SUMS` asset, downloaded.
+///
+/// Returns empty string when the release publishes no checksum.
+async fn release_checksum(rel: &serde_json::Value, asset: &serde_json::Value) -> String {
+    let asset_name = asset["name"].as_str().unwrap_or("");
+    let body = rel["body"].as_str().unwrap_or("");
+    if let Some(h) = parse_sha256_body(body, asset_name) {
+        return h;
+    }
+    // Companion checksum asset, e.g. `foo.AppImage.sha256`.
+    let sum_asset = rel["assets"].as_array().and_then(|assets| {
+        assets.iter().find(|a| {
+            a["name"]
+                .as_str()
+                .map(|n| n.ends_with(".sha256") || n.ends_with(".sha256sum"))
+                .unwrap_or(false)
+        })
+    });
+    let Some(sum_asset) = sum_asset else {
+        return String::new();
+    };
+    let url = sum_asset["browser_download_url"].as_str().unwrap_or("");
+    if url.is_empty() {
+        return String::new();
+    }
+    let content = match reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "Software-Center/1.0")
+        .send()
+        .await
+    {
+        Ok(r) => r.text().await.unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    parse_sha256_body(&content, asset_name).unwrap_or_default()
 }
 
 /// True when a release-asset filename does not clearly target another arch.
@@ -1991,5 +2465,255 @@ mod tests {
         assert!(name_matches_arch("app-1.0-aarch64.AppImage", "aarch64"));
         assert!(!name_matches_arch("app-1.0-x86_64.AppImage", "aarch64"));
         assert!(name_matches_arch("app-1.0.AppImage", "x86_64"));
+    }
+
+    #[test]
+    fn known_source_resolves_popular_apps() {
+        for id in ["rpcs3", "eden", "duckstation", "pcsx2", "youwee"] {
+            assert!(
+                known_source_for(id).is_some(),
+                "expected known source for {id}"
+            );
+        }
+        assert!(known_source_for("unknown-app").is_none());
+    }
+
+    #[test]
+    fn known_source_specs_are_well_formed() {
+        for (id, spec) in KNOWN_SOURCES {
+            assert!(!spec.source.is_empty(), "{id}: source");
+            assert!(!spec.url.is_empty(), "{id}: url");
+            assert!(!spec.pattern.is_empty(), "{id}: pattern");
+            assert!(
+                glob_to_regex(spec.pattern).as_str() != "(?-i)^$",
+                "{id}: bad glob"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_source_prefers_manual_over_known() {
+        let app = AppImage {
+            id: "rpcs3".to_string(),
+            update_source: "github".to_string(),
+            update_url: "https://api.github.com/repos/user/own/releases/latest".to_string(),
+            update_pattern: "mine-*.AppImage".to_string(),
+            ..Default::default()
+        };
+        let (src, url, pat) = resolve_source(&app);
+        assert_eq!(src, "github");
+        assert_eq!(url, "https://api.github.com/repos/user/own/releases/latest");
+        assert_eq!(pat, "mine-*.AppImage");
+    }
+
+    #[test]
+    fn resolve_source_falls_back_to_known_when_none() {
+        let mut app = AppImage {
+            id: "duckstation".to_string(),
+            ..Default::default()
+        };
+        app.update_source = "none".to_string();
+        let (src, url, pat) = resolve_source(&app);
+        assert_eq!(src, "github");
+        assert_eq!(
+            url,
+            "https://api.github.com/repos/stenzek/duckstation/releases/latest"
+        );
+        assert_eq!(pat, "DuckStation-x64.AppImage");
+    }
+
+    #[test]
+    fn compare_by_date_detects_newer_release() {
+        // installed 2026-01-01, release 2026-02-01 → newer
+        assert!(release_newer_than(
+            "2026-02-01T10:00:00Z",
+            "2026-01-01T00:00:00Z"
+        ));
+        // release older → not newer
+        assert!(!release_newer_than(
+            "2025-12-01T10:00:00Z",
+            "2026-01-01T00:00:00Z"
+        ));
+        // empty installed_at → treat as newer (no prior record)
+        assert!(release_newer_than("2026-02-01T10:00:00Z", ""));
+        // identical date → not newer
+        assert!(!release_newer_than(
+            "2026-02-01T10:00:00Z",
+            "2026-02-01T10:00:00Z"
+        ));
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_known_source_rpcs3_by_date() {
+        let app = AppImage {
+            id: "rpcs3".to_string(),
+            version: "0.0.18".to_string(),
+            installed_at: "2026-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let res = check_update(&app).await.expect("expected RPCS3 update");
+        assert_eq!(res.id, "rpcs3");
+        assert!(res.download_url.contains("AppImage"));
+        assert_eq!(res.checksum.len(), 64, "RPCS3 harus expose sha256 di body");
+        println!(
+            "RPCS3 -> {} ({}) sha256={}",
+            res.new_version, res.download_url, res.checksum
+        );
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn e2e_known_source_duckstation_by_date() {
+        let app = AppImage {
+            id: "duckstation".to_string(),
+            version: "0.1".to_string(),
+            installed_at: "2026-01-01T00:00:00Z".to_string(),
+            ..Default::default()
+        };
+        let res = check_update(&app)
+            .await
+            .expect("expected DuckStation update");
+        assert_eq!(res.id, "duckstation");
+        assert!(res.download_url.contains("AppImage"));
+        println!("DuckStation -> {} ({})", res.new_version, res.download_url);
+    }
+
+    #[test]
+    fn parse_sha256_body_handles_rpcs3_semicolon_size() {
+        let body = "42e4836b404595a11934e3358486bf1ba107521a5373507ab4a152ad1ea4b40c;93787487B";
+        assert_eq!(
+            parse_sha256_body(body, "rpcs3-v0.0.42-19748-4c63acfb_linux64.AppImage").as_deref(),
+            Some("42e4836b404595a11934e3358486bf1ba107521a5373507ab4a152ad1ea4b40c")
+        );
+    }
+
+    #[test]
+    fn parse_sha256_body_handles_coreutils_format() {
+        let h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        // `<hash>  <name>` — matches target
+        let body = format!("{h}  SomeApp-x86_64.AppImage\nother content");
+        assert_eq!(
+            parse_sha256_body(&body, "SomeApp-x86_64.AppImage").as_deref(),
+            Some(h)
+        );
+        // `<hash> *<name>` (BSD) — matches target
+        let body2 = format!("{h} *SomeApp-x86_64.AppImage");
+        assert_eq!(
+            parse_sha256_body(&body2, "SomeApp-x86_64.AppImage").as_deref(),
+            Some(h)
+        );
+        // filename mismatch → None
+        assert_eq!(parse_sha256_body(&body, "OtherApp.AppImage"), None);
+    }
+
+    #[test]
+    fn parse_sha256_body_returns_none_without_hash() {
+        assert_eq!(parse_sha256_body("no hash here", "foo.AppImage"), None);
+        assert_eq!(parse_sha256_body("", "foo.AppImage"), None);
+        // hash of wrong length (md5) ignored
+        assert_eq!(
+            parse_sha256_body("5d41402abc4b2a76b9719d911017c592", "x"),
+            None
+        );
+    }
+
+    #[test]
+    fn sha256_hex_of_file_matches_known_hash() {
+        let path = std::env::temp_dir().join("sc-sha-test.txt");
+        std::fs::write(&path, b"hello world").unwrap();
+        let got = sha256_hex_of_file(&path).unwrap();
+        // sha256("hello world")
+        assert_eq!(
+            got,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn verify_sha256_detects_mismatch_case_insensitive() {
+        let a = "B94D27B9934D3E08A52E52D7DA7DABFAC484EFE37A5380EE9088F7ACE2EFCDE9";
+        let b = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        assert!(verify_sha256(a, b));
+        let c = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(!verify_sha256(a, c));
+        assert!(!verify_sha256("", b));
+    }
+
+    #[test]
+    fn companion_checksum_reads_sha256_sibling() {
+        let dir = std::env::temp_dir().join("sc-companion-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let app = dir.join("MyApp.AppImage");
+        let sum = dir.join("MyApp.AppImage.sha256");
+        std::fs::write(&app, b"not real but enough").unwrap();
+        let h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        std::fs::write(&sum, format!("{h}  MyApp.AppImage\n")).unwrap();
+        assert_eq!(companion_checksum(&app).as_deref(), Some(h));
+        // no companion → None
+        let app2 = dir.join("NoSum.AppImage");
+        std::fs::write(&app2, b"x").unwrap();
+        assert_eq!(companion_checksum(&app2), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn write_sidecar(dir: &std::path::Path, id: &str, version: &str, prev: &str) {
+        let app = AppImage {
+            id: id.to_string(),
+            name: id.to_string(),
+            version: version.to_string(),
+            previous_version: prev.to_string(),
+            installed_path: dir
+                .join(format!("{id}.AppImage"))
+                .to_string_lossy()
+                .to_string(),
+            ..Default::default()
+        };
+        let json = serde_json::to_string_pretty(&app).unwrap();
+        std::fs::write(dir.join(format!("{id}.json")), json).unwrap();
+    }
+
+    #[test]
+    fn rollback_swaps_file_and_version_back_and_forth() {
+        let dir = std::env::temp_dir().join("sc-rollback-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let new_file = dir.join("app.AppImage");
+        let bak_file = dir.join("app.AppImage.bak");
+        std::fs::write(&new_file, b"NEW").unwrap();
+        std::fs::write(&bak_file, b"OLD").unwrap();
+        write_sidecar(&dir, "app", "2.0", "1.0");
+
+        let (ok, _) = swap_rollback(&dir, "app");
+        assert!(ok);
+        assert_eq!(std::fs::read(&new_file).unwrap(), b"OLD");
+        assert_eq!(std::fs::read(&bak_file).unwrap(), b"NEW");
+        let sidecar: AppImage =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("app.json")).unwrap()).unwrap();
+        assert_eq!(sidecar.version, "1.0");
+        assert_eq!(sidecar.previous_version, "2.0");
+        assert!(std::fs::metadata(&new_file).unwrap().permissions().mode() & 0o111 != 0);
+
+        // rollback again → back to 2.0
+        let (ok2, _) = swap_rollback(&dir, "app");
+        assert!(ok2);
+        assert_eq!(std::fs::read(&new_file).unwrap(), b"NEW");
+        let sidecar: AppImage =
+            serde_json::from_str(&std::fs::read_to_string(dir.join("app.json")).unwrap()).unwrap();
+        assert_eq!(sidecar.version, "2.0");
+        assert_eq!(sidecar.previous_version, "1.0");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rollback_fails_without_backup() {
+        let dir = std::env::temp_dir().join("sc-rollback-none");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("app.AppImage"), b"NEW").unwrap();
+        write_sidecar(&dir, "app", "2.0", "1.0");
+        let (ok, msg) = swap_rollback(&dir, "app");
+        assert!(!ok);
+        assert!(msg.contains("tidak ada") || msg.contains("backup") || msg.contains("not found"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
