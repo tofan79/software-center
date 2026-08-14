@@ -14,3 +14,4 @@ tokio = { workspace = true }
 reqwest = { workspace = true }
 futures-util = { workspace = true }
 regex = "1"
+sha2 = "0.10"

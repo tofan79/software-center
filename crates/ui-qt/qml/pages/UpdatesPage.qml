@@ -463,7 +463,7 @@ Item {
             currentOpLabel = "Updating " + (item.name || item.id || item.app_id || "") + "… (" + stepNum + "/" + total + ")";
             activeUpdateType = item.id || item.app_id || item.name || "";
             currentPkg = item;
-            backend.updateAppImage(activeUpdateType, item.download_url || "", item.new_version || "");
+            backend.updateAppImage(activeUpdateType, item.download_url || "", item.new_version || "", item.checksum || "");
         }
         pollTimer.start();
     }
@@ -735,7 +735,7 @@ Item {
                                             }
                                         } else if (pkg.pkg_type === "appimage") {
                                             updatesPage.activeUpdateType = pkgId;
-                                            backend.updateAppImage(pkgId, pkg.download_url || "", pkg.new_version || "");
+                                            backend.updateAppImage(pkgId, pkg.download_url || "", pkg.new_version || "", pkg.checksum || "");
                                         } else {
                                             // Individual RPM update — only upgrade this specific package
                                             updatesPage.activeUpdateType = pkgId;

@@ -812,6 +812,7 @@ pub struct SoftwareBackend {
                             "download_url":    u.download_url,
                             "icon_path":       u.icon_path,
                             "default_source":  u.default_source,
+                            "checksum":        u.checksum,
                         })
                     })
                     .collect();
@@ -1311,10 +1312,17 @@ pub struct SoftwareBackend {
     ),
 
     updateAppImage: qt_method!(
-        fn updateAppImage(&mut self, id: QString, download_url: QString, new_version: QString) {
+        fn updateAppImage(
+            &mut self,
+            id: QString,
+            download_url: QString,
+            new_version: QString,
+            checksum: QString,
+        ) {
             let id = id.to_string();
             let download_url = download_url.to_string();
             let new_version = new_version.to_string();
+            let checksum = checksum.to_string();
             log_activity(&format!("Update AppImage: {id}"));
             self.start_op();
             let shared = self.get_shared();
@@ -1322,9 +1330,12 @@ pub struct SoftwareBackend {
                 let _ = std::fs::write(log_path(), format!("Updating AppImage {}...\n", id));
 
                 let mut exit_code = 1i32;
-                for line in
-                    scenter_appimages::update_appimage_stream(&id, &download_url, &new_version)
-                {
+                for line in scenter_appimages::update_appimage_stream(
+                    &id,
+                    &download_url,
+                    &new_version,
+                    &checksum,
+                ) {
                     if let Some(code) = line.strip_prefix("__done__") {
                         exit_code = code.trim().parse().unwrap_or(1);
                     } else if let Some(pct) = line.strip_prefix("DOWNLOAD:") {

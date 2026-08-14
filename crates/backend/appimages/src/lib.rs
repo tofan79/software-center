@@ -182,6 +182,86 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
 
 // ── Data types ────────────────────────────────────────────────────────────────
 
+// ── Checksum helpers ──────────────────────────────────────────────────────────
+
+/// Extract a SHA256 from a release body. Supports the formats seen in the
+/// wild:
+/// - `hash` alone
+/// - `hash;size` (RPCS3)
+/// - `hash  name` / `hash *name` (coreutils/BSD sha256sum)
+///
+/// When a filename is present it must match `target`.
+pub fn parse_sha256_body(body: &str, target: &str) -> Option<String> {
+    let re = Regex::new(r"(?i)([0-9a-f]{64})").ok()?;
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let caps = re.captures(line)?;
+        let hash = caps[1].to_ascii_lowercase();
+        let rest = line.replace(&caps[1], "");
+        let rest = rest.trim();
+        if rest.is_empty() || rest.starts_with(';') {
+            // bare hash, or `hash;size` (RPCS3) → treat as the target's checksum
+            return Some(hash);
+        }
+        // `hash  name` or `hash *name` — verify the name matches target
+        let name = rest.trim_start_matches([' ', '*', '\t']).to_string();
+        if name == target {
+            return Some(hash);
+        }
+    }
+    None
+}
+
+/// Compute the lowercase hex SHA256 of a file.
+pub fn sha256_hex_of_file(path: &std::path::Path) -> anyhow::Result<String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let mut f = std::fs::File::open(path)?;
+    let mut buf = [0u8; 65536];
+    let mut hasher = sha2::Sha256::new();
+    loop {
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Case-insensitive SHA256 comparison; empty expected → "no checksum" → false.
+pub fn verify_sha256(expected: &str, actual: &str) -> bool {
+    !expected.is_empty() && expected.eq_ignore_ascii_case(actual)
+}
+
+/// Look for a `<file>.sha256` / `<file>.sha256sum` sibling next to a local
+/// AppImage and return the expected SHA256 for that file, if published.
+pub fn companion_checksum(src: &std::path::Path) -> Option<String> {
+    let name = src.file_name()?.to_str()?;
+    let dir = src.parent()?;
+    let mut candidates = vec![
+        dir.join(format!("{name}.sha256")),
+        dir.join(format!("{name}.sha256sum")),
+        dir.join(format!("{name}.SHA256SUMS")),
+    ];
+    // also `<stem>.sha256`
+    if let Some(stem) = src.file_stem().and_then(|s| s.to_str()) {
+        candidates.push(dir.join(format!("{stem}.sha256")));
+    }
+    for c in candidates {
+        let Ok(content) = std::fs::read_to_string(&c) else {
+            continue;
+        };
+        if let Some(h) = parse_sha256_body(&content, name) {
+            return Some(h);
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppImage {
     pub id: String,
@@ -218,6 +298,9 @@ pub struct UpdateResult {
     /// (i.e. the AppImage shipped no update metadata).
     #[serde(default)]
     pub default_source: bool,
+    /// Optional SHA256 of the update, when the release publishes one.
+    #[serde(default)]
+    pub checksum: String,
 }
 
 /// Info extracted from an AppImage binary (for display / install confirmation).
@@ -758,6 +841,24 @@ pub fn install_appimage(src_path: &str) -> (bool, String, Option<AppImage>) {
 }
 
 fn do_install(src: &std::path::Path) -> (bool, String, Option<AppImage>) {
+    // Verify checksum before installing when a `.sha256` sibling is present.
+    if let Some(expected) = companion_checksum(src) {
+        match sha256_hex_of_file(src) {
+            Ok(actual) if verify_sha256(&expected, &actual) => {}
+            Ok(actual) => {
+                return (
+                    false,
+                    format!(
+                        "SHA256 mismatch! expected {}, got {}. Install dibatalkan.",
+                        expected, actual
+                    ),
+                    None,
+                )
+            }
+            Err(e) => return (false, format!("Error computing SHA256: {}", e), None),
+        }
+    }
+
     // Ensure directories
     for dir in &[install_dir(), icon_dir(), desktop_dir()] {
         if let Err(e) = std::fs::create_dir_all(dir) {
@@ -1238,7 +1339,8 @@ async fn check_github_update(app: &AppImage, compare_by_date: bool) -> Option<Up
                 .as_array()
                 .and_then(|assets| pick_asset(assets, &pattern, &host))
             {
-                return Some(make_result(app, new_version, asset));
+                let checksum = release_checksum(rel, asset).await;
+                return Some(make_result(app, new_version, asset, &checksum));
             }
         }
         return None;
@@ -1249,7 +1351,8 @@ async fn check_github_update(app: &AppImage, compare_by_date: bool) -> Option<Up
         return None;
     }
     let asset = pick_asset(resp["assets"].as_array()?, &pattern, &host)?;
-    Some(make_result(app, new_version, asset))
+    let checksum = release_checksum(&resp, asset).await;
+    Some(make_result(app, new_version, asset, &checksum))
 }
 
 /// Gitea / Forgejo release API (Codeberg uses the same API).
@@ -1285,7 +1388,8 @@ async fn check_gitea_update(app: &AppImage, compare_by_date: bool) -> Option<Upd
             .as_array()
             .and_then(|assets| pick_asset(assets, &pattern, &host))
         {
-            return Some(make_result(app, new_version, asset));
+            let checksum = release_checksum(rel, asset).await;
+            return Some(make_result(app, new_version, asset, &checksum));
         }
     }
     None
@@ -1358,6 +1462,7 @@ async fn check_gitlab_update(app: &AppImage, _compare_by_date: bool) -> Option<U
         download_url: asset["url"].as_str().unwrap_or("").to_string(),
         icon_path: app.icon_path.clone(),
         default_source: false,
+        checksum: String::new(),
     })
 }
 
@@ -1423,6 +1528,7 @@ async fn check_url_update(app: &AppImage, _compare_by_date: bool) -> Option<Upda
             download_url: app.update_url.clone(),
             icon_path: app.icon_path.clone(),
             default_source: false,
+            checksum: String::new(),
         });
     }
     None
@@ -1592,10 +1698,12 @@ pub fn update_appimage_stream(
     app_id: &str,
     download_url: &str,
     new_version_hint: &str,
+    checksum: &str,
 ) -> impl Iterator<Item = String> {
     let app_id = app_id.to_string();
     let download_url = download_url.to_string();
     let new_version_hint = new_version_hint.to_string();
+    let checksum = checksum.to_string();
 
     let sidecar_path = install_dir().join(format!("{}.json", app_id));
     let Ok(content) = std::fs::read_to_string(&sidecar_path) else {
@@ -1718,6 +1826,32 @@ pub fn update_appimage_stream(
             machine_name_of(&tmp_path.to_string_lossy()),
             host
         ));
+
+        // Verify SHA256 against the release's published checksum, when one is
+        // known. Mismatch aborts before we touch the installed binary;
+        // no published checksum → proceed (fallback).
+        if !checksum.is_empty() {
+            let _ = tx.send("Verifying SHA256 checksum...".to_string());
+            match sha256_hex_of_file(&tmp_path) {
+                Ok(actual) if verify_sha256(&checksum, &actual) => {
+                    let _ = tx.send("Checksum OK.".to_string());
+                }
+                Ok(actual) => {
+                    let _ = std::fs::remove_file(&tmp_path);
+                    let _ = tx.send(format!(
+                        "Error: SHA256 mismatch! expected {}, got {}. Update dibatalkan.",
+                        checksum, actual
+                    ));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+                Err(e) => {
+                    let _ = tx.send(format!("Error computing SHA256: {}", e));
+                    let _ = tx.send("__done__1".to_string());
+                    return;
+                }
+            }
+        }
 
         // Atomic replace with a backup so we can roll back on failure.
         let new_path = install_dir().join(format!("{}.AppImage", app_id));
@@ -1926,7 +2060,12 @@ fn pick_asset<'a>(
         .or_else(|| matching.first().copied())
 }
 
-fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -> UpdateResult {
+fn make_result(
+    app: &AppImage,
+    new_version: String,
+    asset: &serde_json::Value,
+    checksum: &str,
+) -> UpdateResult {
     UpdateResult {
         id: app.id.clone(),
         name: app.name.clone(),
@@ -1938,7 +2077,47 @@ fn make_result(app: &AppImage, new_version: String, asset: &serde_json::Value) -
             .to_string(),
         icon_path: app.icon_path.clone(),
         default_source: false,
+        checksum: checksum.to_string(),
     }
+}
+
+/// Extract a SHA256 checksum for `asset` from a release. Checks, in order:
+/// 1. checksum content embedded in the release body (RPCS3's `hash;size`, etc.)
+/// 2. a companion `*.sha256` / `.sha256sum` / `.SHA256SUMS` asset, downloaded.
+///
+/// Returns empty string when the release publishes no checksum.
+async fn release_checksum(rel: &serde_json::Value, asset: &serde_json::Value) -> String {
+    let asset_name = asset["name"].as_str().unwrap_or("");
+    let body = rel["body"].as_str().unwrap_or("");
+    if let Some(h) = parse_sha256_body(body, asset_name) {
+        return h;
+    }
+    // Companion checksum asset, e.g. `foo.AppImage.sha256`.
+    let sum_asset = rel["assets"].as_array().and_then(|assets| {
+        assets.iter().find(|a| {
+            a["name"]
+                .as_str()
+                .map(|n| n.ends_with(".sha256") || n.ends_with(".sha256sum"))
+                .unwrap_or(false)
+        })
+    });
+    let Some(sum_asset) = sum_asset else {
+        return String::new();
+    };
+    let url = sum_asset["browser_download_url"].as_str().unwrap_or("");
+    if url.is_empty() {
+        return String::new();
+    }
+    let content = match reqwest::Client::new()
+        .get(url)
+        .header("User-Agent", "Software-Center/1.0")
+        .send()
+        .await
+    {
+        Ok(r) => r.text().await.unwrap_or_default(),
+        Err(_) => String::new(),
+    };
+    parse_sha256_body(&content, asset_name).unwrap_or_default()
 }
 
 /// True when a release-asset filename does not clearly target another arch.
@@ -2274,7 +2453,11 @@ mod tests {
         let res = check_update(&app).await.expect("expected RPCS3 update");
         assert_eq!(res.id, "rpcs3");
         assert!(res.download_url.contains("AppImage"));
-        println!("RPCS3 -> {} ({})", res.new_version, res.download_url);
+        assert_eq!(res.checksum.len(), 64, "RPCS3 harus expose sha256 di body");
+        println!(
+            "RPCS3 -> {} ({}) sha256={}",
+            res.new_version, res.download_url, res.checksum
+        );
     }
 
     #[tokio::test]
@@ -2292,5 +2475,84 @@ mod tests {
         assert_eq!(res.id, "duckstation");
         assert!(res.download_url.contains("AppImage"));
         println!("DuckStation -> {} ({})", res.new_version, res.download_url);
+    }
+
+    #[test]
+    fn parse_sha256_body_handles_rpcs3_semicolon_size() {
+        let body = "42e4836b404595a11934e3358486bf1ba107521a5373507ab4a152ad1ea4b40c;93787487B";
+        assert_eq!(
+            parse_sha256_body(body, "rpcs3-v0.0.42-19748-4c63acfb_linux64.AppImage").as_deref(),
+            Some("42e4836b404595a11934e3358486bf1ba107521a5373507ab4a152ad1ea4b40c")
+        );
+    }
+
+    #[test]
+    fn parse_sha256_body_handles_coreutils_format() {
+        let h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        // `<hash>  <name>` — matches target
+        let body = format!("{h}  SomeApp-x86_64.AppImage\nother content");
+        assert_eq!(
+            parse_sha256_body(&body, "SomeApp-x86_64.AppImage").as_deref(),
+            Some(h)
+        );
+        // `<hash> *<name>` (BSD) — matches target
+        let body2 = format!("{h} *SomeApp-x86_64.AppImage");
+        assert_eq!(
+            parse_sha256_body(&body2, "SomeApp-x86_64.AppImage").as_deref(),
+            Some(h)
+        );
+        // filename mismatch → None
+        assert_eq!(parse_sha256_body(&body, "OtherApp.AppImage"), None);
+    }
+
+    #[test]
+    fn parse_sha256_body_returns_none_without_hash() {
+        assert_eq!(parse_sha256_body("no hash here", "foo.AppImage"), None);
+        assert_eq!(parse_sha256_body("", "foo.AppImage"), None);
+        // hash of wrong length (md5) ignored
+        assert_eq!(
+            parse_sha256_body("5d41402abc4b2a76b9719d911017c592", "x"),
+            None
+        );
+    }
+
+    #[test]
+    fn sha256_hex_of_file_matches_known_hash() {
+        let path = std::env::temp_dir().join("sc-sha-test.txt");
+        std::fs::write(&path, b"hello world").unwrap();
+        let got = sha256_hex_of_file(&path).unwrap();
+        // sha256("hello world")
+        assert_eq!(
+            got,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn verify_sha256_detects_mismatch_case_insensitive() {
+        let a = "B94D27B9934D3E08A52E52D7DA7DABFAC484EFE37A5380EE9088F7ACE2EFCDE9";
+        let b = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9";
+        assert!(verify_sha256(a, b));
+        let c = "0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(!verify_sha256(a, c));
+        assert!(!verify_sha256("", b));
+    }
+
+    #[test]
+    fn companion_checksum_reads_sha256_sibling() {
+        let dir = std::env::temp_dir().join("sc-companion-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let app = dir.join("MyApp.AppImage");
+        let sum = dir.join("MyApp.AppImage.sha256");
+        std::fs::write(&app, b"not real but enough").unwrap();
+        let h = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08";
+        std::fs::write(&sum, format!("{h}  MyApp.AppImage\n")).unwrap();
+        assert_eq!(companion_checksum(&app).as_deref(), Some(h));
+        // no companion → None
+        let app2 = dir.join("NoSum.AppImage");
+        std::fs::write(&app2, b"x").unwrap();
+        assert_eq!(companion_checksum(&app2), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

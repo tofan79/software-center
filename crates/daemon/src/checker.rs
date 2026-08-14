@@ -367,6 +367,7 @@ async fn check_appimages() -> Vec<serde_json::Value> {
                         "download_url":    result.download_url,
                         "icon_path":       result.icon_path,
                         "default_source":  result.default_source,
+                        "checksum":        result.checksum,
                     })),
                     _ => None,
                 }
