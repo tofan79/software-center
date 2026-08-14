@@ -1821,7 +1821,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "scenter-appimages"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "futures-util",
@@ -1836,7 +1836,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-appstream"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "flate2",
@@ -1848,7 +1848,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-daemon"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-flatpak"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-home"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "log",
@@ -1895,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-packages"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "log",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-qt"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "env_logger",
@@ -1925,7 +1925,7 @@ dependencies = [
 
 [[package]]
 name = "scenter-updates"
-version = "1.0.13"
+version = "1.1.0"
 dependencies = [
  "libc",
  "scenter-appstream",
